@@ -490,6 +490,156 @@ test("concurrent first messages create one Codex thread", async () => {
   assert.equal(runtime.created, 1);
 });
 
+test("a forked DSH Session branches through App Server and binds the child Thread", async () => {
+  const runtime = new FakeRuntime();
+  const adapter = new CodexDshAdapter({ runtime, ready: Promise.resolve() });
+  const parentThreadId = await adapter.ensureThread("dsh-fork-parent");
+  const child = fakeAgent({ id: "dsh-fork-child" });
+  adapter.attachAgent(child);
+
+  const chunks = await collect(adapter.stream({
+    provider: "relay-codex",
+    model: "codex-test",
+    sessionId: child.id,
+    messages: [
+      {
+        role: "assistant",
+        source: {
+          kind: "model",
+          provider: "relay-codex",
+          model: "codex-test",
+          replayState: {
+            threadId: parentThreadId,
+            turnId: "turn-original",
+            itemId: "item-original",
+          },
+        },
+        content: [{ type: "text", text: "parent answer" }],
+      },
+      { role: "user", source: { kind: "user" }, content: [{ type: "text", text: "continue in fork" }] },
+    ],
+  }));
+
+  assert.equal(runtime.created, 1);
+  assert.equal(runtime.forked.length, 1);
+  assert.equal(runtime.forked[0].threadId, parentThreadId);
+  assert.equal(runtime.forked[0].config.lastTurnId, "turn-original");
+  assert.equal(runtime.forked[0].config.model, "codex-test");
+  assert.ok(Array.isArray(runtime.forked[0].config.dynamicTools));
+  assert.equal(adapter.threadFor(child.id), "thread-fork-1");
+  assert.equal(runtime.sent.at(-1).threadId, "thread-fork-1");
+  assert.equal(adapter.statusForSession(child.id), null);
+  assert.equal(chunks.at(-1).reason.kind, "stop");
+});
+
+test("an inherited fork without a completed Turn fails closed before App Server fork", async () => {
+  const runtime = new FakeRuntime();
+  const adapter = new CodexDshAdapter({
+    runtime, ready: Promise.resolve(), logger: { error() {}, warn() {} },
+  });
+  const parentThreadId = await adapter.ensureThread("dsh-fork-parent");
+
+  await assert.rejects(adapter.ensureThread("dsh-fork-child", undefined, {
+    threadId: parentThreadId,
+    turnId: null,
+    itemId: "item-original",
+  }), (error) => {
+    assert.equal(error.code, "CODEX_REBIND_REQUIRED");
+    assert.equal(error.threadId, parentThreadId);
+    assert.equal(error.itemId, "item-original");
+    assert.match(error.message, /did not create a replacement/);
+    return true;
+  });
+
+  assert.equal(runtime.forked.length, 0);
+  assert.equal(runtime.created, 1);
+  assert.equal(adapter.threadFor("dsh-fork-child"), null);
+});
+
+test("an inherited Thread without a DSH owner cannot authorize an App Server fork", async () => {
+  const runtime = new FakeRuntime();
+  const adapter = new CodexDshAdapter({
+    runtime, ready: Promise.resolve(), logger: { error() {}, warn() {} },
+  });
+
+  await assert.rejects(adapter.ensureThread("dsh-fork-child", undefined, {
+    threadId: "thread-from-imported-history",
+    turnId: "turn-original",
+    itemId: "item-original",
+  }), { code: "CODEX_REBIND_REQUIRED" });
+
+  assert.equal(runtime.forked.length, 0);
+  assert.equal(runtime.created, 0);
+  assert.equal(adapter.threadFor("dsh-fork-child"), null);
+});
+
+test("App Server fork failure stays fail-closed and can retry the same provenance", async () => {
+  const runtime = new FakeRuntime();
+  const adapter = new CodexDshAdapter({
+    runtime, ready: Promise.resolve(), logger: { error() {}, warn() {} },
+  });
+  const parentThreadId = await adapter.ensureThread("dsh-fork-parent");
+  const provenance = { threadId: parentThreadId, turnId: "turn-original", itemId: "item-original" };
+  runtime.forkError = new Error("lastTurnId is still in progress");
+
+  await assert.rejects(adapter.ensureThread("dsh-fork-child", undefined, provenance), (error) => {
+    assert.equal(error.code, "CODEX_REBIND_REQUIRED");
+    assert.equal(error.threadId, parentThreadId);
+    assert.equal(error.turnId, "turn-original");
+    return true;
+  });
+  assert.equal(adapter.threadFor("dsh-fork-child"), null);
+  assert.equal(runtime.created, 1);
+
+  runtime.forkError = null;
+  assert.equal(
+    await adapter.ensureThread("dsh-fork-child", undefined, provenance),
+    "thread-fork-1",
+  );
+  assert.equal(adapter.statusForSession("dsh-fork-child"), null);
+});
+
+test("concurrent first messages create one App Server fork for the child Session", async () => {
+  const runtime = new FakeRuntime();
+  const adapter = new CodexDshAdapter({ runtime, ready: Promise.resolve() });
+  const parentThreadId = await adapter.ensureThread("dsh-fork-parent");
+  const provenance = { threadId: parentThreadId, turnId: "turn-original", itemId: "item-original" };
+
+  const [left, right] = await Promise.all([
+    adapter.ensureThread("dsh-fork-child", undefined, provenance),
+    adapter.ensureThread("dsh-fork-child", undefined, provenance),
+  ]);
+
+  assert.equal(left, right);
+  assert.equal(runtime.forked.length, 1);
+  assert.equal(runtime.created, 1);
+});
+
+test("a missing persisted native Thread requires rebind and never creates a replacement", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "relay-codex-native-rebind-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "links.json");
+  const first = new CodexDshAdapter({
+    runtime: new FakeRuntime(), ready: Promise.resolve(), linkStore: new CodexLinkStore(path),
+  });
+  const original = await first.ensureThread("dsh-native");
+
+  const runtime = new MissingResumeRuntime();
+  const second = new CodexDshAdapter({
+    runtime, ready: Promise.resolve(), linkStore: new CodexLinkStore(path),
+  });
+  await assert.rejects(second.ensureThread("dsh-native"), {
+    code: "CODEX_REBIND_REQUIRED",
+    threadId: original,
+  });
+  assert.equal(runtime.created, 0);
+  assert.equal(second.threadFor("dsh-native"), original);
+  assert.equal(second.statusForSession("dsh-native").state, "rebind-required");
+
+  const persisted = JSON.parse(await readFile(path, "utf8"));
+  assert.equal(persisted.sessions["dsh-native"].threadId, original);
+});
+
 test("an existing Codex thread refreshes when the DSH tool surface changes", async () => {
   const runtime = new FakeRuntime();
   const adapter = new CodexDshAdapter({ runtime, ready: Promise.resolve() });
@@ -548,7 +698,10 @@ test("Codex images are imported through the DSH attachment store and cannot esca
 
 test("Codex interactions use DSH approval and question services without Relay Event tools", async () => {
   const agent = fakeAgent();
-  const adapter = { dshSessionForThread: threadId => threadId === "thread-1" ? agent.id : null };
+  const adapterRuntime = new FakeRuntime();
+  const adapter = new CodexDshAdapter({ runtime: adapterRuntime, ready: Promise.resolve() });
+  adapter.attachAgent(agent);
+  assert.equal(await adapter.ensureThread(agent.id), "thread-1");
   const calls = { approvals: [], questions: [] };
   const ctx = {
     agents: { get: id => id === agent.id ? agent : null },
@@ -571,7 +724,9 @@ test("Codex interactions use DSH approval and question services without Relay Ev
 
   await handleCodexServerRequest(ctx, {
     adapter, runtime,
-    request: request("approval-1", "item/commandExecution/requestApproval", { command: "git status" }),
+    request: request("approval-1", "item/commandExecution/requestApproval", {
+      itemId: "item-approval", command: "git status",
+    }),
   });
   assert.equal(calls.approvals[0].agent, agent);
   assert.equal(runtime.resolved.at(-1).response.action, "accept");
@@ -583,6 +738,50 @@ test("Codex interactions use DSH approval and question services without Relay Ev
     }),
   });
   assert.deepEqual(runtime.resolved.at(-1).response.answers, { choice: ["Continue", "with tests"] });
+});
+
+test("disconnect/reconnect stale approval replay fails closed when its Session binding changes", async () => {
+  const agent = fakeAgent({ id: "dsh-approval-child" });
+  const adapterRuntime = new FakeRuntime();
+  const adapter = new CodexDshAdapter({ runtime: adapterRuntime, ready: Promise.resolve() });
+  adapter.attachAgent(agent);
+  assert.equal(await adapter.ensureThread(agent.id), "thread-1");
+  let releaseApproval;
+  const approvalStarted = Promise.withResolvers();
+  const runtime = new InteractionRuntime();
+  const pending = handleCodexServerRequest({
+    agents: { get: id => id === agent.id ? agent : null },
+    approval: {
+      request() {
+        approvalStarted.resolve();
+        return new Promise(resolve => { releaseApproval = resolve; });
+      },
+    },
+    userQuestions: { async ask() { throw new Error("unexpected question"); } },
+  }, {
+    adapter,
+    runtime,
+    request: request("approval-stale", "item/commandExecution/requestApproval", {
+      turnId: "turn-original",
+      itemId: "item-original",
+      command: "git status",
+    }),
+  });
+
+  await approvalStarted.promise;
+  // A browser disconnect leaves the Host-side approval pending. Reconnection
+  // may replay that same request, but a changed owner/binding makes it stale.
+  adapter.detachAgent(agent.id);
+  releaseApproval("allowed-once");
+  await pending;
+
+  assert.equal(runtime.resolved.length, 0);
+  assert.equal(runtime.rejected.length, 1);
+  assert.equal(runtime.rejected[0].error.code, "CODEX_STALE_APPROVAL");
+  assert.match(runtime.rejected[0].error.message, /thread thread-1/);
+  assert.match(runtime.rejected[0].error.message, /turn turn-original/);
+  assert.match(runtime.rejected[0].error.message, /item item-original/);
+  assert.match(runtime.rejected[0].error.message, /rejected without being sent to Codex/);
 });
 
 test("Codex exposes and executes only the generic DSH tools assembled for the turn", async () => {
@@ -730,6 +929,9 @@ class FakeRuntime extends EventEmitter {
     this.created = 0;
     this.resumed = 0;
     this.createdConfigs = [];
+    this.forked = [];
+    this.forkSequence = 0;
+    this.forkError = null;
     this.released = [];
   }
 
@@ -746,6 +948,14 @@ class FakeRuntime extends EventEmitter {
     this.resumed += 1;
     this.sessions.set(threadId, { id: threadId, turns: [], ...config });
     return this.sessions.get(threadId);
+  }
+
+  async forkSession(threadId, config) {
+    if (this.forkError) throw this.forkError;
+    this.forked.push({ threadId, config: structuredClone(config) });
+    const session = { id: `thread-fork-${++this.forkSequence}`, turns: [], ...config };
+    this.sessions.set(session.id, session);
+    return session;
   }
 
   async sendMessage(threadId, message) {
@@ -791,6 +1001,13 @@ class FailingResumeRuntime extends FakeRuntime {
   async resumeSession() {
     this.resumed += 1;
     throw new Error("thread already has an active writer");
+  }
+}
+
+class MissingResumeRuntime extends FakeRuntime {
+  async resumeSession() {
+    this.resumed += 1;
+    throw new Error("thread not found");
   }
 }
 

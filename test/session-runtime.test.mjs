@@ -47,6 +47,47 @@ test("Codex threads keep their context across turns, switching, and resume", asy
   await runtime.close();
 });
 
+test("Codex forks branch through App Server thread/fork at the requested completed turn", async () => {
+  const client = new FakeCodexClient();
+  const runtime = new CodexSessionRuntime({ client, cwd: "/workspace/relay" });
+  await runtime.initialize();
+  const parent = await runtime.createSession({ model: "codex-test", effort: "medium" });
+  await runtime.sendMessage(parent.id, { text: "parent turn" });
+  await tick();
+
+  const child = await runtime.forkSession(parent.id, {
+    lastTurnId: "turn-1",
+    model: "codex-test",
+    effort: "low",
+    sandbox: "read-only",
+    approvalPolicy: "never",
+  });
+
+  assert.notEqual(child.id, parent.id);
+  assert.equal(child.forkedFromId, parent.id);
+  assert.deepEqual(child.turns.map(turn => turn.id), ["turn-1"]);
+  const fork = client.requests.find(request => request.method === "thread/fork");
+  assert.deepEqual(fork.params, {
+    threadId: parent.id,
+    lastTurnId: "turn-1",
+    cwd: "/workspace/relay",
+    model: "codex-test",
+    modelProvider: null,
+    serviceTier: null,
+    config: { "features.realtime_conversation": false },
+    approvalsReviewer: "user",
+    approvalPolicy: "never",
+    permissions: ":read-only",
+    runtimeWorkspaceRoots: [],
+    baseInstructions: null,
+    developerInstructions: null,
+    ephemeral: false,
+    threadSource: "relay.codex",
+  });
+  assert.equal(client.requests.filter(request => request.method === "thread/start").length, 1);
+  await runtime.close();
+});
+
 test("Codex image turns use native localImage input and attachment metadata", async () => {
   const client = new FakeCodexClient();
   const runtime = new CodexSessionRuntime({ client, cwd: "/workspace/relay" });
@@ -344,6 +385,28 @@ class FakeCodexClient extends EventEmitter {
       thread.ephemeral = Boolean(params.ephemeral);
       this.threads.set(thread.id, thread);
       return { thread: structuredClone(thread) };
+    }
+    if (method === "thread/fork") {
+      const source = this.threads.get(params.threadId);
+      if (!source) throw new Error(`unknown thread ${params.threadId}`);
+      const lastTurnIndex = source.turns.findIndex(turn => turn.id === params.lastTurnId);
+      if (lastTurnIndex === -1) throw new Error(`unknown turn ${params.lastTurnId}`);
+      const thread = structuredClone(source);
+      thread.id = `thread-${++this.threadSequence}`;
+      thread.sessionId = thread.id;
+      thread.forkedFromId = source.id;
+      thread.cwd = params.cwd ?? source.cwd;
+      thread.threadSource = params.threadSource;
+      thread.ephemeral = Boolean(params.ephemeral);
+      thread.turns = thread.turns.slice(0, lastTurnIndex + 1);
+      this.threads.set(thread.id, thread);
+      return {
+        thread: structuredClone(thread),
+        model: params.model,
+        reasoningEffort: "low",
+        approvalPolicy: params.approvalPolicy,
+        cwd: thread.cwd,
+      };
     }
     if (method === "thread/resume") return { thread: structuredClone(this.threads.get(params.threadId)) };
     if (method === "thread/read") return { thread: structuredClone(this.threads.get(params.threadId)) };

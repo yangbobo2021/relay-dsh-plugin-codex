@@ -13,7 +13,9 @@ test("Codex plugin exposes operation capabilities and releases subscriptions", a
   const terminal = host.capabilities.require("relay.terminal.codex.v1", "^1.0.0");
 
   await execution.whenReady();
+  assert.equal(execution.status().state, "connected");
   assert.deepEqual(execution.listModels().map((model) => model.id), ["codex-test"]);
+  assert.equal(typeof execution.forkSession, "function");
   assert.equal("runtime" in execution, false);
   assert.equal("client" in execution, false);
   const requests = [];
@@ -27,6 +29,29 @@ test("Codex plugin exposes operation capabilities and releases subscriptions", a
   assert.equal(await terminal.request("terminal/test", {}), "ok");
   await host.dispose();
   assert.equal(client.closed, true);
+});
+
+test("a missing configured executable keeps the plugin loaded with actionable unavailable status", async () => {
+  const host = new PluginHost();
+  await host.activate([createCodexExecutionPlugin({
+    command: process.platform === "win32" ? "Z:\\relay-missing\\codex.exe" : "/relay/missing/codex",
+    requestTimeoutMs: 1_000,
+  })]);
+  const execution = host.capabilities.require("relay.execution.codex.v1", "^1.0.0");
+
+  await assert.rejects(execution.whenReady(), (error) => {
+    assert.equal(error.code, "CODEX_EXECUTABLE_NOT_FOUND");
+    assert.doesNotMatch(error.message, /spawn|ENOENT/i);
+    return true;
+  });
+  assert.deepEqual(execution.status(), {
+    state: "unavailable",
+    code: "CODEX_EXECUTABLE_NOT_FOUND",
+    message: "Codex could not start because the configured executable was not found.",
+    action: "Remove the invalid codexCommand or RELAY_CODEX_COMMAND override, or set it to an absolute Codex executable path.",
+    changedAt: execution.status().changedAt,
+  });
+  await host.dispose();
 });
 
 class FakeCodexClient extends EventEmitter {

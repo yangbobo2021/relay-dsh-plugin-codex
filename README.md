@@ -188,6 +188,38 @@ manual refresh action.
 Tools execute through the owning Agent's DSH tool runtime and remain subject to
 DSH permissions and Codex approval behavior.
 
+## Reliability and App Server Lifecycle
+
+The DSH Host plugin owns the Codex App Server process. It starts one child while
+the plugin activates, before Codex model discovery, and stops it when DSH or the
+plugin shuts down. The default child comes from the pinned `@openai/codex`
+dependency, so a global `codex` command is not required.
+
+Open **Settings → Advanced** to see whether Codex is **Connected**, **Not
+started**, **Starting**, **Connection failed**, or **Codex unavailable**. A
+forked Session that inherited Codex history without a safe one-to-one binding
+shows **Rebind required** in its Session header. Installation and connection
+errors include a stable error code and a next action; raw errors such as `spawn
+codex ENOENT` are not shown as the user instruction.
+
+On a blank New Session, switching among Standard, Codex, and Claude selects the
+matching backend's model group and default reasoning effort. Delayed Codex model
+discovery is retried, and an older asynchronous result cannot overwrite a newer
+backend choice.
+
+Forks use the Codex App Server `thread/fork` method. The child DSH Session sends
+the inherited parent Thread id and completed `lastTurnId`; the returned child
+Thread gets a new durable one-to-one binding. The operation fails closed if
+provenance is incomplete, the source Thread has no owning DSH Session, or App
+Server rejects the fork: Relay never falls back to `thread/start`. Existing
+persisted bindings are also retained when resume fails. A pending approval is
+answered only if its DSH Session, Codex Thread, Turn, Item, request, and binding
+generation still match after reconnect; otherwise it is rejected with
+diagnostic provenance.
+
+See the [reliability specification](docs/reliability-spec.md) and
+[executable acceptance matrix](docs/reliability-acceptance.md).
+
 ## Plugin Boundary and Relay
 
 This repository was designed and compatibility-tested in
@@ -255,6 +287,21 @@ dsh web
 The DSH bundle configuration property `codexCommand` has higher priority than
 `RELAY_CODEX_COMMAND`. Prefer an absolute native executable path; leaving both
 unset selects the bundled, plugin-tested Codex version.
+
+If Settings shows `CODEX_EXECUTABLE_NOT_FOUND`, remove an invalid
+`codexCommand`/`RELAY_CODEX_COMMAND` override or replace it with an absolute
+path. `CODEX_RUNTIME_MISSING` means the platform optional dependency must be
+restored by reinstalling the plugin. **Connection failed** instead means the
+executable was found but App Server initialization or its process failed.
+
+### A forked Session says Rebind required
+
+Normal forks call App Server `thread/fork` and bind the returned child Thread.
+This status means the source Thread/Turn could not authorize or complete that
+operation—for example, the Turn was still running, provenance was incomplete,
+or the source binding no longer existed. Return to the original DSH Session,
+fix the reported condition, and retry Fork. The plugin intentionally does not
+fall back to a fresh replacement Thread.
 
 ### The composer is disabled
 

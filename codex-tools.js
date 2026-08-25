@@ -50,11 +50,13 @@ export async function handleCodexServerRequest(ctx, { adapter, runtime, request 
       return;
     }
     if (isApproval(request.method)) {
+      const ownership = adapter.captureRequestOwnership(request);
       const outcome = await ctx.approval.request({
         agent,
         toolName: approvalToolName(request),
         reason: approvalReason(request),
       });
+      adapter.assertRequestOwnership(ownership, request);
       await runtime.resolveRequest(request.id, {
         action: outcome === "allowed-once" ? "accept" : "decline",
       });

@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { definePlugin } from "./internal/plugin-sdk.mjs";
 import { CodexAppServerClient, NATIVE_CODEX_APP_SERVER_ARGS } from "./app-server-client.mjs";
 import { CodexSessionRuntime } from "./session-runtime.mjs";
@@ -19,11 +20,7 @@ export function createCodexExecutionPlugin(config = {}) {
     },
     activate({ capabilities, defer }) {
       const logger = capabilities.optional("relay.logging.v1") ?? console;
-      const client = config.client ?? new CodexAppServerClient({
-        command: config.command,
-        args: config.args ?? NATIVE_CODEX_APP_SERVER_ARGS,
-        requestTimeoutMs: positiveInteger(config.requestTimeoutMs, 60_000),
-      });
+      const client = config.client ?? createAppServerClient(config);
       const runtime = new CodexSessionRuntime({ client, cwd: config.cwd ?? process.cwd() });
       defer(() => runtime.close());
       const ready = runtime.initialize();
@@ -41,9 +38,37 @@ export function createCodexExecutionPlugin(config = {}) {
   });
 }
 
+function createAppServerClient(config) {
+  try {
+    return new CodexAppServerClient({
+      command: config.command,
+      args: config.args ?? NATIVE_CODEX_APP_SERVER_ARGS,
+      requestTimeoutMs: positiveInteger(config.requestTimeoutMs, 60_000),
+    });
+  } catch (error) {
+    return new FailedCodexClient(error);
+  }
+}
+
+class FailedCodexClient extends EventEmitter {
+  constructor(error) {
+    super();
+    this.error = error;
+    this.process = null;
+  }
+
+  async start() { throw this.error; }
+  async request() { throw this.error; }
+  respond() { throw this.error; }
+  respondError() {}
+  async close() {}
+}
+
 function executionCapability(runtime, ready) {
   return Object.freeze({
     whenReady: () => ready,
+    status: () => runtime.status(),
+    subscribeStatus: (listener) => subscribe(runtime, "connectionStatus", listener),
     listModels: () => structuredClone(runtime.models),
     hasSession: (sessionId) => runtime.sessions.has(sessionId),
     getSession: runtime.getSession.bind(runtime),
@@ -61,6 +86,7 @@ function executionCapability(runtime, ready) {
       return runtime.readThread(...args);
     },
     createSession: runtime.createSession.bind(runtime),
+    forkSession: runtime.forkSession.bind(runtime),
     resumeSession: runtime.resumeSession.bind(runtime),
     sendMessage: runtime.sendMessage.bind(runtime),
     interruptTurn: runtime.interruptTurn.bind(runtime),

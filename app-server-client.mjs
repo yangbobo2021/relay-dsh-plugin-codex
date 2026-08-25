@@ -127,6 +127,7 @@ export class CodexAppServerClient extends EventEmitter {
     this.closed = false;
     this.process = spawn(this.command, this.args, {
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     });
 
     const output = readline.createInterface({ input: this.process.stdout });
@@ -155,7 +156,7 @@ export class CodexAppServerClient extends EventEmitter {
 
   request(method, params = {}, { timeoutMs = this.requestTimeoutMs } = {}) {
     if (!this.process?.stdin?.writable) {
-      return Promise.reject(new Error("codex app-server is not running"));
+      return Promise.reject(appServerNotRunningError());
     }
     const id = this.nextRequestId++;
     return new Promise((resolve, reject) => {
@@ -233,7 +234,7 @@ export class CodexAppServerClient extends EventEmitter {
 
   write(message) {
     if (!this.process?.stdin?.writable) {
-      throw new Error("codex app-server is not running");
+      throw appServerNotRunningError();
     }
     this.process.stdin.write(`${JSON.stringify(message)}\n`);
   }
@@ -250,4 +251,10 @@ export class CodexAppServerClient extends EventEmitter {
     }
     this.pending.clear();
   }
+}
+
+function appServerNotRunningError() {
+  const error = new Error("Codex App Server is not running. Restart DSH and inspect the Codex status in Settings.");
+  error.code = "CODEX_APP_SERVER_NOT_RUNNING";
+  return error;
 }

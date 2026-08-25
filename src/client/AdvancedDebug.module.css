@@ -14,6 +14,57 @@
   padding: 8px 0;
 }
 
+.statusRow {
+  display: flex;
+  min-height: 70px;
+  align-items: flex-start;
+  gap: 10px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  padding: 10px 0;
+}
+
+.statusDot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-tertiary);
+}
+
+.statusRow[data-codex-status='connected'] .statusDot {
+  background: #27a65b;
+}
+
+.statusRow[data-codex-status='connection-failed'] .statusDot,
+.statusRow[data-codex-status='unavailable'] .statusDot,
+.statusRow[data-codex-status='rebind-required'] .statusDot {
+  background: #d94841;
+}
+
+.settingCopy code {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+.statusBadge {
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.statusError {
+  background: color-mix(in srgb, #d94841 14%, transparent);
+  color: #d94841;
+}
+
+.statusRebind {
+  background: color-mix(in srgb, #c26a00 16%, transparent);
+  color: #a95d00;
+}
+
 .settingCopy {
   display: flex;
   min-width: 0;

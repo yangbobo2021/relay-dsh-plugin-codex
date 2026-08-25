@@ -12,7 +12,7 @@ test("default App Server launch arguments match native Codex Desktop", () => {
 
 test("a missing Codex executable reports an actionable configuration error", async () => {
   const client = new CodexAppServerClient({
-    command: "/relay/missing/codex",
+    command: missingCodexPath(),
     requestTimeoutMs: 1_000,
   });
   await assert.rejects(client.start(), (error) => {
@@ -20,6 +20,10 @@ test("a missing Codex executable reports an actionable configuration error", asy
     return /RELAY_CODEX_COMMAND/.test(error.message);
   });
 });
+
+function missingCodexPath() {
+  return process.platform === "win32" ? "Z:\\relay-missing\\codex.exe" : "/relay/missing/codex";
+}
 
 test("JSON-RPC requests resolve, reject, and time out with their method context", async () => {
   const writes = [];
@@ -164,4 +168,13 @@ test("a closed App Server stdin rejects pending work without an unhandled stream
   await assert.rejects(pending, /EPIPE/);
   assert.equal(client.pending.size, 0);
   client.process = null;
+});
+
+test("requests made while App Server is stopped carry an actionable stable code", async () => {
+  const client = new CodexAppServerClient();
+  await assert.rejects(client.request("model/list"), (error) => {
+    assert.equal(error.code, "CODEX_APP_SERVER_NOT_RUNNING");
+    assert.match(error.message, /Restart DSH/);
+    return true;
+  });
 });

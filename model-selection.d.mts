@@ -14,4 +14,5 @@ export function installModelSelection(
   preset: string,
   provider: string,
   otherProvider: string,
+  options?: { retryDelaysMs?: readonly number[] },
 ): () => void

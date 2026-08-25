@@ -1,10 +1,11 @@
 import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 
-import { LlmAdapter } from "@deepseek-ai/dsh-llm";
+import { LlmAdapter, LlmError } from "@deepseek-ai/dsh-llm";
 
 import { importCodexGeneratedImage, importCodexImage } from "./codex-image.js";
 import { CODEX_APP_DYNAMIC_TOOLS, codexDynamicTools } from "./codex-tools.js";
+import { rebindRequiredStatus } from "./connection-status.mjs";
 
 export const CODEX_PRESET = "relay-codex";
 export const CODEX_PROVIDER = "relay-codex";
@@ -39,6 +40,8 @@ export class CodexDshAdapter extends LlmAdapter {
     this.agents = new Map();
     this.dshToolNames = new Map();
     this.appliedDynamicToolSignatures = new Map();
+    this.rebindStates = new Map();
+    this.bindingEpochs = new Map();
     for (const [sessionId, record] of linkStore?.entries() ?? []) {
       if (record.threadId) this.links.set(sessionId, record.threadId);
       this.settings.set(sessionId, record.config);
@@ -105,9 +108,11 @@ export class CodexDshAdapter extends LlmAdapter {
   }
 
   detachAgent(sessionId) {
-    this.agents.delete(String(sessionId));
-    this.dshToolNames.delete(String(sessionId));
-    this.appliedDynamicToolSignatures.delete(String(sessionId));
+    const key = String(sessionId);
+    this.agents.delete(key);
+    this.dshToolNames.delete(key);
+    this.appliedDynamicToolSignatures.delete(key);
+    this.bumpBindingEpoch(key);
   }
 
   configuration(sessionId, cwd) {
@@ -139,15 +144,83 @@ export class CodexDshAdapter extends LlmAdapter {
     return structuredClone(next);
   }
 
-  async ensureThread(sessionId, dynamicTools = this.dynamicTools) {
+  async ensureThread(sessionId, dynamicTools = this.dynamicTools, inheritedProvenance = null) {
     const key = String(sessionId);
     const pending = this.pendingThreads.get(key);
     if (pending) return pending;
-    const operation = this.createOrResumeThread(key, dynamicTools).finally(() => {
+    const blocked = this.rebindStates.get(key);
+    if (blocked && !sameProvenance(blocked.details, inheritedProvenance)) {
+      throw rebindRequiredError(blocked);
+    }
+    const operation = (!this.links.has(key) && inheritedProvenance?.threadId
+      ? this.forkInheritedThread(key, dynamicTools, inheritedProvenance)
+      : this.createOrResumeThread(key, dynamicTools)).finally(() => {
       this.pendingThreads.delete(key);
     });
     this.pendingThreads.set(key, operation);
     return operation;
+  }
+
+  async forkInheritedThread(sessionId, dynamicTools, provenance) {
+    await this.ready;
+    const sourceSessionId = this.dshSessionForThread(provenance.threadId);
+    if (!provenance.turnId
+      || !sourceSessionId
+      || sourceSessionId === sessionId
+      || this.rebindStates.has(sourceSessionId)) {
+      this.logger.error(
+        `Codex App Server thread/fork was not authorized for child ${sessionId}: `
+        + `thread=${provenance.threadId}, turn=${provenance.turnId ?? "missing"}, `
+        + `sourceSession=${sourceSessionId ?? "missing"}, `
+        + `sourceRequiresRebind=${sourceSessionId ? this.rebindStates.has(sourceSessionId) : false}`,
+      );
+      throw this.enterRebindRequired(sessionId, provenance);
+    }
+    const settings = { ...this.configuration(sessionId), dynamicTools };
+    let forked;
+    try {
+      forked = await this.runtime.forkSession(provenance.threadId, {
+        ...settings,
+        lastTurnId: provenance.turnId,
+      });
+    } catch (cause) {
+      this.logger.error(
+        `Codex App Server thread/fork failed for thread ${provenance.threadId}, `
+        + `turn ${provenance.turnId}: ${cause?.stack ?? cause}`,
+      );
+      throw this.enterRebindRequired(sessionId, provenance, cause);
+    }
+    const existingSession = this.dshSessionForThread(forked?.id);
+    if (!forked?.id || forked.id === provenance.threadId
+      || (existingSession && existingSession !== sessionId)) {
+      throw this.enterRebindRequired(sessionId, provenance,
+        new Error("Codex App Server returned an invalid or already-bound forked Thread"));
+    }
+
+    this.links.set(sessionId, forked.id);
+    this.bindingModes.set(sessionId, "native");
+    this.rebindStates.delete(sessionId);
+    this.bumpBindingEpoch(sessionId);
+    this.persistLink(sessionId);
+
+    const signature = JSON.stringify(dynamicTools);
+    const sourceSignature = this.appliedDynamicToolSignatures.get(sourceSessionId);
+    if (sourceSignature !== signature) {
+      try {
+        await this.runtime.resumeSession(forked.id, settings);
+      } catch (error) {
+        throw persistedResumeError(sessionId, forked.id, error, this);
+      }
+    }
+    this.appliedDynamicToolSignatures.set(sessionId, signature);
+    return forked.id;
+  }
+
+  enterRebindRequired(sessionId, provenance, cause) {
+    const status = rebindRequiredStatus(provenance);
+    this.rebindStates.set(String(sessionId), status);
+    this.bumpBindingEpoch(sessionId);
+    return rebindRequiredError(status, cause);
   }
 
   async createOrResumeThread(sessionId, dynamicTools) {
@@ -168,15 +241,12 @@ export class CodexDshAdapter extends LlmAdapter {
         this.appliedDynamicToolSignatures.set(sessionId, signature);
         return linked;
       } catch (error) {
-        if (this.bindingModes.get(sessionId) === "imported") {
-          throw importedResumeError(linked, error);
-        }
-        this.logger.warn(`Relay could not resume Codex thread ${linked}; creating a replacement: ${error.message}`);
-        this.links.delete(sessionId);
+        throw persistedResumeError(sessionId, linked, error, this);
       }
     }
     const created = await this.runtime.createSession(settings);
     this.links.set(sessionId, created.id);
+    this.bumpBindingEpoch(sessionId);
     this.appliedDynamicToolSignatures.set(sessionId, signature);
     this.persistLink(sessionId);
     return created.id;
@@ -209,6 +279,8 @@ export class CodexDshAdapter extends LlmAdapter {
     }
     const nextConfig = { ...this.configuration(key, config.cwd), ...compact(config) };
     this.links.set(key, candidate);
+    this.rebindStates.delete(key);
+    this.bumpBindingEpoch(key);
     this.settings.set(key, nextConfig);
     this.bindingModes.set(key, "imported");
     if (!this.importStates.has(key)) this.importStates.set(key, "reserved");
@@ -255,6 +327,9 @@ export class CodexDshAdapter extends LlmAdapter {
     this.appliedDynamicToolSignatures.delete(oldKey);
 
     this.links.set(newKey, threadId);
+    this.rebindStates.delete(newKey);
+    this.bumpBindingEpoch(oldKey);
+    this.bumpBindingEpoch(newKey);
     this.settings.set(newKey, config);
     this.bindingModes.set(newKey, "imported");
     this.importStates.set(newKey, "committed");
@@ -325,6 +400,49 @@ export class CodexDshAdapter extends LlmAdapter {
     return null;
   }
 
+  statusForSession(sessionId) {
+    const status = this.rebindStates.get(String(sessionId));
+    return status ? structuredClone(status) : null;
+  }
+
+  captureRequestOwnership(request) {
+    const threadId = requiredIdentity(request.params?.threadId, "threadId");
+    const sessionId = this.dshSessionForThread(threadId);
+    if (!sessionId) throw requestOwnershipError(request, "has no owning DSH Session");
+    if (this.rebindStates.has(sessionId)) throw requestOwnershipError(request, "requires rebind");
+    return Object.freeze({
+      requestId: String(request.id),
+      sessionId,
+      threadId,
+      turnId: optionalIdentity(request.params?.turnId),
+      itemId: optionalIdentity(request.params?.itemId),
+      epoch: this.bindingEpochs.get(sessionId) ?? 0,
+    });
+  }
+
+  assertRequestOwnership(ownership, request) {
+    const currentThread = this.links.get(ownership.sessionId);
+    const currentEpoch = this.bindingEpochs.get(ownership.sessionId) ?? 0;
+    const currentTurn = optionalIdentity(request.params?.turnId);
+    const currentItem = optionalIdentity(request.params?.itemId);
+    if (String(request.id) !== ownership.requestId
+      || currentThread !== ownership.threadId
+      || currentEpoch !== ownership.epoch
+      || currentTurn !== ownership.turnId
+      || currentItem !== ownership.itemId
+      || !this.agents.has(ownership.sessionId)
+      || this.rebindStates.has(ownership.sessionId)) {
+      throw requestOwnershipError(request,
+        `is stale for DSH Session ${ownership.sessionId}; rebind required`, ownership);
+    }
+    return true;
+  }
+
+  bumpBindingEpoch(sessionId) {
+    const key = String(sessionId);
+    this.bindingEpochs.set(key, (this.bindingEpochs.get(key) ?? 0) + 1);
+  }
+
   hasDshTool(sessionId, name) {
     return this.dshToolNames.get(String(sessionId))?.has(name) === true;
   }
@@ -350,7 +468,11 @@ export class CodexDshAdapter extends LlmAdapter {
     });
     const dshTools = options.tools ?? [];
     this.dshToolNames.set(sessionId, new Set(dshTools.map(tool => tool.name)));
-    const threadId = await this.ensureThread(sessionId, codexDynamicTools(dshTools, this.dynamicTools));
+    const threadId = await this.ensureThread(
+      sessionId,
+      codexDynamicTools(dshTools, this.dynamicTools),
+      inheritedCodexProvenance(options.messages),
+    );
     const queue = new ActivityQueue(options.signal);
     const onActivity = (message) => {
       const candidate = message.params?.threadId ?? message.params?.thread?.id;
@@ -534,19 +656,99 @@ export class CodexDshAdapter extends LlmAdapter {
 
 function importedResumeError(threadId, cause) {
   if (isActiveWriterError(cause)) {
-    const error = new Error(
+    const error = new LlmError(
       `Codex thread ${threadId} is still owned by another Codex App Server. `
       + "Switching Sessions may not release this process-level writer. Fully quit or restart "
       + "the owning Codex app, CLI, or App Server process, then retry this message in DSH. "
       + "DSH kept the original thread binding and did not create a replacement.",
+      CODEX_THREAD_ACTIVE_WRITER,
       { cause },
     );
-    error.code = CODEX_THREAD_ACTIVE_WRITER;
     error.retryable = true;
     error.threadId = threadId;
     return error;
   }
   return new Error(`Relay could not resume imported Codex thread ${threadId}: ${cause.message}`, { cause });
+}
+
+function persistedResumeError(sessionId, threadId, cause, adapter) {
+  if (isActiveWriterError(cause)) return importedResumeError(threadId, cause);
+  if (/\b(?:not found|does not exist|unknown thread)\b/i.test(cause?.message ?? "")) {
+    const status = rebindRequiredStatus({ threadId });
+    adapter.rebindStates.set(String(sessionId), status);
+    adapter.bumpBindingEpoch(sessionId);
+    return rebindRequiredError(status, cause);
+  }
+  const error = new LlmError(
+    `Relay could not resume the Codex binding for DSH Session ${sessionId} and thread ${threadId}. `
+    + "The original binding was preserved and no replacement Codex Thread was created. Retry after the Codex connection recovers.",
+    "CODEX_THREAD_RESUME_FAILED",
+    { cause },
+  );
+  error.retryable = true;
+  error.threadId = threadId;
+  error.sessionId = String(sessionId);
+  return error;
+}
+
+function rebindRequiredError(status, cause) {
+  const error = new LlmError(
+    `${status.message} ${status.action}`,
+    status.code,
+    cause ? { cause } : undefined,
+  );
+  error.retryable = false;
+  Object.assign(error, status.details ?? {});
+  return error;
+}
+
+function inheritedCodexProvenance(messages = []) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "assistant" || message.source?.kind !== "model") continue;
+    const replay = message.source.replayState;
+    if (message.source.provider !== CODEX_PROVIDER || !replay || typeof replay !== "object") continue;
+    const threadId = optionalIdentity(replay.threadId);
+    if (!threadId) continue;
+    return {
+      threadId,
+      turnId: optionalIdentity(replay.turnId),
+      itemId: optionalIdentity(replay.itemId),
+    };
+  }
+  return null;
+}
+
+function sameProvenance(left, right) {
+  return Boolean(left && right
+    && left.threadId === right.threadId
+    && (left.turnId ?? null) === (right.turnId ?? null)
+    && (left.itemId ?? null) === (right.itemId ?? null));
+}
+
+function requestOwnershipError(request, reason, ownership = {}) {
+  const threadId = optionalIdentity(request.params?.threadId) ?? ownership.threadId ?? "unknown";
+  const turnId = optionalIdentity(request.params?.turnId) ?? ownership.turnId ?? "unknown";
+  const itemId = optionalIdentity(request.params?.itemId) ?? ownership.itemId ?? "unknown";
+  const error = new Error(
+    `Codex approval ${request.id} ${reason}. Original thread ${threadId}, turn ${turnId}, item ${itemId}. `
+    + "The approval was rejected without being sent to Codex.",
+  );
+  error.code = "CODEX_STALE_APPROVAL";
+  error.threadId = threadId;
+  error.turnId = turnId;
+  error.itemId = itemId;
+  return error;
+}
+
+function requiredIdentity(value, name) {
+  const identity = optionalIdentity(value);
+  if (!identity) throw new Error(`Codex request ${name} is required`);
+  return identity;
+}
+
+function optionalIdentity(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function isActiveWriterError(error) {

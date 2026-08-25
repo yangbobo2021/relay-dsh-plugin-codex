@@ -177,6 +177,33 @@ Session 前就必须可用；批量导入时间不会覆盖 Codex inventory 的
 工具通过当前 Agent 的 DSH 工具运行时执行，并继续受到 DSH 权限和 Codex
 审批机制约束。
 
+## 可靠性与 App Server 生命周期
+
+Codex App Server 进程由 DSH Host 插件负责。插件激活时、Codex 模型发现之前，
+Host 会启动一个子进程；DSH 或插件退出时会停止它。默认子进程来自锁定版本的
+`@openai/codex` 依赖，因此不要求系统中存在全局 `codex` 命令。
+
+打开 **Settings → Advanced** 可以查看 Codex 是 **已连接**、**未启动**、
+**正在启动**、**连接失败** 还是 **Codex 不可用**。如果 fork 子 Session 继承了
+Codex 历史，却没有安全的一对一绑定，Session 标题栏会显示 **需要重新绑定**。
+安装和连接错误会提供稳定错误码及下一步操作，不会把 `spawn codex ENOENT`
+这样的底层错误直接当成用户提示。
+
+在空白 New Session 中切换 Standard、Codex 和 Claude 时，模型选择会跟随对应
+后端的能力组和默认 reasoning effort。Codex 模型发现较慢时会进行有界重试，
+较早返回的异步结果不能覆盖用户更新的后端选择。
+
+fork 通过 Codex App Server 的 `thread/fork` 实现。子 DSH Session 会提交继承的
+父 Thread id 与已完成的 `lastTurnId`，并把返回的新 Thread 建立为持久的一对一
+绑定。如果来源信息不完整、源 Thread 没有对应的 DSH Session，或 App Server
+拒绝 fork，操作会 fail closed，绝不会回退到 `thread/start`。持久绑定 resume
+失败时也会保留原绑定。重连后处理 pending approval 前，会再次核对 DSH Session、
+Codex Thread、Turn、Item、request 和绑定代次；任何不匹配都会拒绝旧 approval，
+并保留可诊断的来源信息。
+
+完整约束见[可靠性规范](docs/reliability-spec.md)与
+[可执行验收矩阵](docs/reliability-acceptance.md)。
+
 ## 插件边界及与 Relay 的关系
 
 本仓库在 [Relay](https://github.com/yangbobo2021/Relay) 项目中完成设计与
@@ -240,6 +267,19 @@ dsh web
 DSH Bundle 配置项 `codexCommand` 的优先级高于 `RELAY_CODEX_COMMAND`。建议填写
 原生可执行文件的绝对路径；两者都不设置时，会使用随插件发布并完成兼容性验证
 的 Codex 版本。
+
+如果 Settings 显示 `CODEX_EXECUTABLE_NOT_FOUND`，请删除错误的
+`codexCommand`/`RELAY_CODEX_COMMAND` 覆盖，或改为绝对路径。
+`CODEX_RUNTIME_MISSING` 表示需要重新安装插件以恢复当前平台的 optional
+dependency。**连接失败** 则表示已经找到可执行文件，但 App Server 初始化或
+子进程运行失败。
+
+### fork 子 Session 显示“需要重新绑定”
+
+正常 fork 会调用 App Server `thread/fork` 并绑定返回的子 Thread。出现此状态
+表示源 Thread/Turn 无法授权或完成该操作，例如 Turn 仍在运行、来源信息不完整，
+或源绑定已不存在。请回到原 DSH Session 修复提示的问题后重新 Fork。插件不会
+回退到全新的替代 Thread。
 
 ### 输入框不可用
 

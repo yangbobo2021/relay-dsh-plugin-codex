@@ -3,12 +3,14 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 const root = new URL('../', import.meta.url)
-const [english, chinese, screenshot, preset, manifestText] = await Promise.all([
+const [english, chinese, screenshot, preset, manifestText, reliabilitySpec, reliabilityAcceptance] = await Promise.all([
   readFile(new URL('README.md', root), 'utf8'),
   readFile(new URL('README.zh.md', root), 'utf8'),
   readFile(new URL('docs/images/dsh-new-session-backends.jpg', root)),
   readFile(new URL('presets/relay-codex/preset.yml', root), 'utf8'),
   readFile(new URL('package.json', root), 'utf8'),
+  readFile(new URL('docs/reliability-spec.md', root), 'utf8'),
+  readFile(new URL('docs/reliability-acceptance.md', root), 'utf8'),
 ])
 const manifest = JSON.parse(manifestText)
 
@@ -45,6 +47,24 @@ test('README screenshot and bilingual preset ship with the package', () => {
   assert.match(preset, /在 DSH 中运行并继续 Codex thread。/)
   assert.ok(manifest.files.includes('README.zh.md'))
   assert.ok(manifest.files.includes('docs/images'))
+  assert.ok(manifest.files.includes('docs/reliability-spec.md'))
+  assert.ok(manifest.files.includes('docs/reliability-acceptance.md'))
+})
+
+test('reliability spec, READMEs, and acceptance matrix describe the implemented contract', () => {
+  for (const document of [english, chinese, reliabilitySpec, reliabilityAcceptance]) {
+    assert.match(document, /rebind|required|重新绑定/i)
+    assert.match(document, /Thread/)
+  }
+  assert.match(reliabilitySpec, /not-started/)
+  assert.match(reliabilitySpec, /connection-failed/)
+  assert.match(reliabilitySpec, /CODEX_STALE_APPROVAL/)
+  assert.match(reliabilitySpec, /binding epoch/)
+  assert.match(
+    reliabilityAcceptance,
+    /disconnect\s*\/\s*pending approval\s*\/\s*reconnect/i,
+  )
+  assert.match(reliabilityAcceptance, /b150a551/)
 })
 
 test('README preserves standalone scope and every supported installation source', () => {

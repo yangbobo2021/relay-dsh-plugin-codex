@@ -13,6 +13,7 @@ import {
 } from './AdvancedDebug.tsx'
 import { en, zh, type CodexLocaleKey } from './locales.ts'
 import { WorkspaceImportAction, type WorkspaceImportInjected } from './WorkspaceImportAction.tsx'
+import { CodexStatusBadge } from './CodexStatus.tsx'
 import {
   importCodexWorkspace,
   refreshImportedWorkspace,
@@ -32,7 +33,17 @@ export function apply(ctx: ClientContext): () => void {
   applyAdvancedDebug(ctx)
   applyWorkspaceImport(ctx)
   applySessionOpenSync(ctx)
+  applyConnectionStatus(ctx)
   return installModelSelection(ctx as ModelSelectionContext, 'relay-codex', 'relay-codex', 'relay-claude')
+}
+
+function applyConnectionStatus(ctx: ClientContext): void {
+  ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
+    name: 'conversation.session.header.actions',
+    id: 'relay-codex-connection-status',
+    order: -19,
+    locale: 'relay.codex',
+  }, CodexStatusBadge))
 }
 
 function applySessionOpenSync(ctx: ClientContext): void {

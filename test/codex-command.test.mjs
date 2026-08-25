@@ -25,6 +25,45 @@ test("explicit configuration overrides environment and the bundled runtime", () 
   );
 });
 
+test("configured executable paths with spaces stay one spawn argument on every platform", () => {
+  assert.deepEqual(
+    resolveCodexLaunch({ command: "C:\\Program Files\\OpenAI\\codex.exe", platform: "win32" }),
+    { command: "C:\\Program Files\\OpenAI\\codex.exe", argsPrefix: [], source: "config" },
+  );
+  assert.deepEqual(
+    resolveCodexLaunch({ command: "/Applications/Codex Tools/codex", platform: "darwin" }),
+    { command: "/Applications/Codex Tools/codex", argsPrefix: [], source: "config" },
+  );
+});
+
+test("bundled package resolution covers macOS, Windows, and Linux on x64 and arm64", () => {
+  const targets = [
+    ["darwin", "arm64", "@openai/codex-darwin-arm64"],
+    ["darwin", "x64", "@openai/codex-darwin-x64"],
+    ["linux", "arm64", "@openai/codex-linux-arm64"],
+    ["linux", "x64", "@openai/codex-linux-x64"],
+    ["win32", "arm64", "@openai/codex-win32-arm64"],
+    ["win32", "x64", "@openai/codex-win32-x64"],
+  ];
+  for (const [platform, arch, platformPackage] of targets) {
+    const resolved = [];
+    const launch = resolveCodexLaunch({
+      platform,
+      arch,
+      execPath: platform === "win32" ? "C:\\Program Files\\nodejs\\node.exe" : "/opt/node with spaces/node",
+      resolvePackage(specifier) {
+        resolved.push(specifier);
+        return specifier === "@openai/codex/bin/codex.js"
+          ? (platform === "win32" ? "C:\\relay plugin\\codex.js" : "/relay plugin/codex.js")
+          : `/packages/${specifier}/package.json`;
+      },
+    });
+    assert.deepEqual(resolved, ["@openai/codex/bin/codex.js", `${platformPackage}/package.json`]);
+    assert.equal(launch.source, "bundled");
+    assert.equal(launch.argsPrefix.length, 1);
+  }
+});
+
 test("a missing bundled runtime has an actionable error", () => {
   assert.throws(
     () => resolveCodexLaunch({ resolvePackage() { throw new Error("missing"); } }),

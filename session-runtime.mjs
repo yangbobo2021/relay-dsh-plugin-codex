@@ -3,6 +3,13 @@ import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import {
+  codexConnectionFailure,
+  codexOperationalError,
+  connectedCodexConnectionStatus,
+  initialCodexConnectionStatus,
+  startingCodexConnectionStatus,
+} from "./connection-status.mjs";
 
 const RELAY_THREAD_SOURCE = "relay.codex";
 const DEFAULT_MULTI_AGENT_MODE = "explicitRequestOnly";
@@ -26,40 +33,55 @@ export class CodexSessionRuntime extends EventEmitter {
     this.selectedSessionId = null;
     this.diagnostics = [];
     this.closed = false;
+    this.connectionStatus = initialCodexConnectionStatus();
 
     this.client.on("notification", (message) => this.handleNotification(message));
     this.client.on("serverRequest", (message) => this.handleServerRequest(message));
     this.client.on("diagnostic", (message) => this.addDiagnostic(message));
     this.client.on("exit", (details) => {
       this.addDiagnostic(`Codex App Server exited: ${JSON.stringify(details)}`);
+      if (!this.closed) {
+        const error = new Error("Codex App Server exited before DSH disconnected.");
+        error.code = "CODEX_APP_SERVER_EXITED";
+        this.setConnectionStatus(codexConnectionFailure(error));
+      }
       this.emitChange();
     });
   }
 
   async initialize() {
-    await this.client.start();
-    const [modelsResult, accountResult, threadsResult] = await Promise.all([
-      this.client.request("model/list", { limit: 50, includeHidden: false }),
-      this.client.request("account/read", { refreshToken: false }).catch((error) => {
-        this.addDiagnostic(`account/read failed: ${error.message}`);
-        return null;
-      }),
-      this.listWorkspaceThreads({ cwd: this.cwd }).catch((error) => {
-        this.addDiagnostic(`thread/list failed: ${error.message}`);
-        return [];
-      }),
-    ]);
-    this.models = modelsResult.data ?? [];
-    this.account = accountResult;
-    for (const thread of threadsResult.filter(
-      (candidate) => candidate.threadSource === RELAY_THREAD_SOURCE,
-    )) {
-      const defaults = this.defaultSessionSettings(thread.cwd);
-      const session = this.upsertThread(thread, defaults);
-      this.recordAppliedThreadSettings(session.id, defaults);
+    this.setConnectionStatus(startingCodexConnectionStatus());
+    try {
+      await this.client.start();
+      const [modelsResult, accountResult, threadsResult] = await Promise.all([
+        this.client.request("model/list", { limit: 50, includeHidden: false }),
+        this.client.request("account/read", { refreshToken: false }).catch((error) => {
+          this.addDiagnostic(`account/read failed: ${error.message}`);
+          return null;
+        }),
+        this.listWorkspaceThreads({ cwd: this.cwd }).catch((error) => {
+          this.addDiagnostic(`thread/list failed: ${error.message}`);
+          return [];
+        }),
+      ]);
+      this.models = modelsResult.data ?? [];
+      this.account = accountResult;
+      for (const thread of threadsResult.filter(
+        (candidate) => candidate.threadSource === RELAY_THREAD_SOURCE,
+      )) {
+        const defaults = this.defaultSessionSettings(thread.cwd);
+        const session = this.upsertThread(thread, defaults);
+        this.recordAppliedThreadSettings(session.id, defaults);
+      }
+      this.setConnectionStatus(connectedCodexConnectionStatus());
+      this.emitChange();
+      return this.snapshot();
+    } catch (error) {
+      const operational = codexOperationalError(error);
+      this.addDiagnostic(`${operational.code}: ${error?.message ?? error}`);
+      this.setConnectionStatus(codexConnectionFailure(operational));
+      throw operational;
     }
-    this.emitChange();
-    return this.snapshot();
   }
 
   async listWorkspaceThreads({
@@ -167,6 +189,63 @@ export class CodexSessionRuntime extends EventEmitter {
     this.recordAppliedThreadSettings(session.id, {
       model: selectedModel,
       effort: selectedEffort,
+      multiAgentMode: DEFAULT_MULTI_AGENT_MODE,
+    });
+    if (!session.ephemeral) this.selectedSessionId = session.id;
+    this.emitChange();
+    return publicSession(session);
+  }
+
+  async forkSession(threadId, {
+    lastTurnId,
+    model,
+    effort,
+    sandbox = "workspace-write",
+    approvalPolicy = "on-request",
+    cwd = this.cwd,
+    baseInstructions,
+    developerInstructions,
+    ephemeral = false,
+    threadSource = RELAY_THREAD_SOURCE,
+  } = {}) {
+    if (!threadId?.trim()) throw new Error("threadId is required");
+    if (!lastTurnId?.trim()) throw new Error("lastTurnId is required for a safe Codex fork");
+    const selectedSandbox = normalizeSandbox(sandbox);
+    const selectedModel = model ?? this.models.find((candidate) => candidate.isDefault)?.id ?? null;
+    const selectedEffort = effort
+      ?? this.models.find((candidate) => candidate.id === selectedModel)?.defaultReasoningEffort
+      ?? null;
+    const result = await this.client.request("thread/fork", compactObject({
+      threadId,
+      lastTurnId,
+      cwd,
+      model: selectedModel,
+      modelProvider: null,
+      serviceTier: null,
+      config: { "features.realtime_conversation": false },
+      approvalsReviewer: "user",
+      approvalPolicy,
+      permissions: permissionProfile(selectedSandbox),
+      runtimeWorkspaceRoots: selectedSandbox === "read-only" ? [] : [cwd],
+      baseInstructions: baseInstructions ?? null,
+      developerInstructions: developerInstructions ?? null,
+      ephemeral,
+      threadSource,
+    }));
+    if (!result?.thread?.id || result.thread.id === threadId) {
+      throw new Error(`thread/fork did not return a distinct child for ${threadId}`);
+    }
+    const session = this.upsertThread(result.thread, {
+      model: result.model ?? selectedModel,
+      effort: result.reasoningEffort ?? selectedEffort,
+      sandbox: selectedSandbox,
+      approvalPolicy: result.approvalPolicy ?? approvalPolicy,
+      cwd: result.cwd ?? cwd,
+      ephemeral: Boolean(result.thread.ephemeral ?? ephemeral),
+    });
+    this.recordAppliedThreadSettings(session.id, {
+      model: session.model,
+      effort: session.effort,
       multiAgentMode: DEFAULT_MULTI_AGENT_MODE,
     });
     if (!session.ephemeral) this.selectedSessionId = session.id;
@@ -358,7 +437,8 @@ export class CodexSessionRuntime extends EventEmitter {
 
   snapshot() {
     return {
-      connected: Boolean(this.client.process ?? this.client.connected),
+      connected: this.connectionStatus.state === "connected",
+      connection: structuredClone(this.connectionStatus),
       selectedSessionId: this.selectedSessionId,
       cwd: this.cwd,
       account: sanitizeAccount(this.account),
@@ -458,6 +538,7 @@ export class CodexSessionRuntime extends EventEmitter {
     const session = existing ?? {
       id: thread.id,
       sessionId: thread.sessionId ?? thread.id,
+      forkedFromId: thread.forkedFromId ?? null,
       title: thread.name || (thread.preview ? summarizeTitle(thread.preview) : ""),
       preview: thread.preview ?? "",
       model: defaults.model ?? null,
@@ -472,6 +553,7 @@ export class CodexSessionRuntime extends EventEmitter {
       updatedAt: (thread.updatedAt ?? Date.now() / 1000) * 1000,
     };
     session.sessionId = thread.sessionId ?? session.sessionId;
+    session.forkedFromId = thread.forkedFromId ?? session.forkedFromId ?? null;
     session.preview = thread.preview ?? session.preview;
     session.cwd = thread.cwd ?? defaults.cwd ?? session.cwd;
     session.status = thread.status ?? session.status;
@@ -555,6 +637,15 @@ export class CodexSessionRuntime extends EventEmitter {
   emitChange() {
     if (this.closed) return;
     this.emit("change", this.snapshot());
+  }
+
+  status() {
+    return structuredClone(this.connectionStatus);
+  }
+
+  setConnectionStatus(status) {
+    this.connectionStatus = status;
+    if (!this.closed) this.emit("connectionStatus", this.status());
   }
 
   recordAppliedThreadSettings(threadId, settings) {

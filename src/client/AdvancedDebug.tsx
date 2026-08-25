@@ -3,6 +3,8 @@ import type {
   InjectFace, PropsLocale, PropsRuntime,
 } from '@deepseek-ai/dsh-client-ui-slots'
 import css from './AdvancedDebug.module.css'
+import { statusLocaleKey } from './codex-status-client.mjs'
+import { useCodexStatus } from './CodexStatus.tsx'
 
 export interface AdvancedDebugSource {
   getSnapshot: () => boolean
@@ -25,8 +27,17 @@ export function AdvancedDebugSection({
   useAdvancedDebug, setAdvancedDebug, t,
 }: AdvancedDebugSectionProps): ReactNode {
   const enabled = useAdvancedDebug(value => value)
+  const codexStatus = useCodexStatus()
   return (
     <section className={css.section}>
+      <div className={css.statusRow} data-codex-status={codexStatus?.state ?? 'loading'}>
+        <span className={css.statusDot} aria-hidden="true" />
+        <div className={css.settingCopy}>
+          <strong>{t('statusTitle')}: {t(statusLocaleKey(codexStatus))}</strong>
+          <span>{codexStatus === null ? t('statusLoadingDetail') : `${codexStatus.message} ${codexStatus.action ?? ''}`.trim()}</span>
+          {codexStatus !== null && <code>{codexStatus.code}</code>}
+        </div>
+      </div>
       <div className={css.settingRow}>
         <div className={css.settingCopy}>
           <strong>{t('advancedDebug')}</strong>

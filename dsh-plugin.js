@@ -9,6 +9,7 @@ import { registerCodexSyncRoute } from "./codex-sync-route.js";
 import { CodexLinkStore } from "./codex-link-store.js";
 import { CODEX_APP_DYNAMIC_TOOLS, handleCodexServerRequest } from "./codex-tools.js";
 import { DshCodexImportTarget } from "./dsh-import-target.js";
+import { registerCodexStatusRoute } from "./codex-status-route.js";
 
 export function createDshCodexPlugin(ctx, config = {}) {
   return definePlugin({
@@ -47,6 +48,7 @@ export function createDshCodexPlugin(ctx, config = {}) {
         synchronizer,
         token: config.codexImportToken ?? process.env.RELAY_CODEX_IMPORT_TOKEN,
       }));
+      defer(registerCodexStatusRoute(ctx, { runtime, adapter }));
       defer(runtime.subscribeRequest((request) => {
         void handleCodexServerRequest(ctx, { adapter, runtime, request })
           .catch(error => ctx.logger.error(`Relay failed to handle a Codex interaction: ${error?.stack ?? error}`));

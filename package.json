@@ -26,7 +26,7 @@
     "./typert": "./lib/typert.host.js",
     "./package.json": "./package.json"
   },
-  "files": ["README.zh.md", "docs/images", "cordis.patch.yml", "presets", "lib/client.js", "lib/client.js.map", "lib/host-plugin.js", "lib/host-plugin.js.map", "lib/typert.host.js", "lib/typert.host.js.map"],
+  "files": ["README.zh.md", "docs/images", "docs/reliability-spec.md", "docs/reliability-acceptance.md", "cordis.patch.yml", "presets", "lib/client.js", "lib/client.js.map", "lib/host-plugin.js", "lib/host-plugin.js.map", "lib/typert.host.js", "lib/typert.host.js.map"],
   "dsh": {
     "client": {
       "inject": ["@deepseek-ai/dsh-client-connection", "@deepseek-ai/dsh-client-locale", "@deepseek-ai/dsh-client-runtime", "@deepseek-ai/dsh-client-ui-conversation", "@deepseek-ai/dsh-client-ui-primitives", "@deepseek-ai/dsh-client-ui-settings", "@deepseek-ai/dsh-client-ui-sidebar", "@deepseek-ai/dsh-client-ui-slots", "@deepseek-ai/dsh-client-ui-theme"],
