@@ -85,3 +85,20 @@ jobs:
       - name: Publish to npm
         if: steps.registry.outputs.exists != 'true'
         run: npm publish --provenance --access public --tag "${{ steps.release.outputs.npm_tag }}"
+      - name: Verify the published dist-tag
+        shell: bash
+        run: |
+          package_name="$(node -p "require('./package.json').name")"
+          expected_version="${{ steps.release.outputs.version }}"
+          npm_tag="${{ steps.release.outputs.npm_tag }}"
+          for attempt in {1..12}; do
+            actual_version="$(npm view "${package_name}@${npm_tag}" version 2>/dev/null || true)"
+            if [[ "${actual_version}" == "${expected_version}" ]]; then
+              echo "${package_name}@${npm_tag} resolves to ${actual_version}"
+              exit 0
+            fi
+            echo "Attempt ${attempt}: expected ${expected_version}, observed ${actual_version:-<missing>}"
+            sleep 5
+          done
+          echo "${package_name}@${npm_tag} did not resolve to ${expected_version}" >&2
+          exit 1

@@ -32,6 +32,8 @@ test("release workflow uses guarded tokenless npm publishing", async () => {
   assert.match(workflow, /git merge-base --is-ancestor/);
   assert.match(workflow, /b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/);
   assert.match(workflow, /npm publish --provenance --access public --tag/);
+  assert.match(workflow, /Verify the published dist-tag/);
+  assert.match(workflow, /npm view \"\$\{package_name\}@\$\{npm_tag\}\" version/);
   assert.match(workflow, /os: \[ubuntu-latest, macos-latest, windows-latest\]/);
   assert.match(workflow, /publish:\s+needs: codex-runtime/);
   assert.ok(
