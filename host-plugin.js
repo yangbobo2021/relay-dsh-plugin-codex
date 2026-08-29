@@ -5,8 +5,8 @@ import { createDshCodexPlugin } from "./dsh-plugin.js";
 import { installManagedPreset } from "./preset.js";
 export const name = "relay-dsh-plugin-codex";
 export const inject = [
-  "agents", "attachments", "llm", "sessions", "sessionPersistence", "tools", "typert", "webServer",
-  "workspaceRegistry", "sessionTitle",
+  "agents", "approval", "attachments", "llm", "sessions", "sessionPersistence", "tools", "typert",
+  "userQuestions", "webServer", "workspaceRegistry", "sessionTitle",
 ];
 
 export async function apply(ctx, config = {}) {

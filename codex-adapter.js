@@ -407,7 +407,10 @@ export class CodexDshAdapter extends LlmAdapter {
   }
 
   captureRequestOwnership(request) {
-    const threadId = requiredIdentity(request.params?.threadId, "threadId");
+    const threadId = requiredIdentity(
+      request.params?.threadId ?? request.params?.conversationId,
+      "threadId",
+    );
     const sessionId = this.dshSessionForThread(threadId);
     if (!sessionId) throw requestOwnershipError(request, "has no owning DSH Session");
     if (this.rebindStates.has(sessionId)) throw requestOwnershipError(request, "requires rebind");
@@ -416,7 +419,7 @@ export class CodexDshAdapter extends LlmAdapter {
       sessionId,
       threadId,
       turnId: optionalIdentity(request.params?.turnId),
-      itemId: optionalIdentity(request.params?.itemId),
+      itemId: optionalIdentity(request.params?.itemId ?? request.params?.callId),
       epoch: this.bindingEpochs.get(sessionId) ?? 0,
     });
   }
@@ -425,7 +428,7 @@ export class CodexDshAdapter extends LlmAdapter {
     const currentThread = this.links.get(ownership.sessionId);
     const currentEpoch = this.bindingEpochs.get(ownership.sessionId) ?? 0;
     const currentTurn = optionalIdentity(request.params?.turnId);
-    const currentItem = optionalIdentity(request.params?.itemId);
+    const currentItem = optionalIdentity(request.params?.itemId ?? request.params?.callId);
     if (String(request.id) !== ownership.requestId
       || currentThread !== ownership.threadId
       || currentEpoch !== ownership.epoch

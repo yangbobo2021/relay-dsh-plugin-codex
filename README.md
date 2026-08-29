@@ -245,7 +245,9 @@ generation still match after reconnect; otherwise it is rejected with
 diagnostic provenance.
 
 See the [reliability specification](docs/reliability-spec.md) and
-[executable acceptance matrix](docs/reliability-acceptance.md).
+[executable acceptance matrix](docs/reliability-acceptance.md). Approval and
+structured-question composition is defined by the
+[DSH interaction bridge specification](docs/spec/dsh-interaction-bridge.md).
 
 ## Plugin Boundary and Relay
 

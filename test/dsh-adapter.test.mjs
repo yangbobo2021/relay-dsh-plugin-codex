@@ -1190,6 +1190,79 @@ test("Codex interactions use DSH approval and question services without Relay Ev
   assert.deepEqual(runtime.resolved.at(-1).response.answers, { choice: ["Continue", "with tests"] });
 });
 
+test("modern and legacy approval identities share the same fail-closed ownership boundary", async () => {
+  const agent = fakeAgent();
+  const adapterRuntime = new FakeRuntime();
+  const adapter = new CodexDshAdapter({ runtime: adapterRuntime, ready: Promise.resolve() });
+  adapter.attachAgent(agent);
+  assert.equal(await adapter.ensureThread(agent.id), "thread-1");
+
+  for (const [index, outcome] of ["rejected", "cancelled", "unavailable"].entries()) {
+    const runtime = new InteractionRuntime();
+    await handleCodexServerRequest({
+      agents: { get: id => id === agent.id ? agent : null },
+      approval: { async request() { return outcome; } },
+      userQuestions: { async ask() { throw new Error("unexpected question"); } },
+    }, {
+      adapter,
+      runtime,
+      request: request(`decline-${index}`, "item/commandExecution/requestApproval", {
+        turnId: `turn-${index}`,
+        itemId: `item-${index}`,
+        command: "git status",
+      }),
+    });
+    assert.deepEqual(runtime.resolved, [{
+      id: `decline-${index}`,
+      response: { action: "decline" },
+    }]);
+    assert.equal(runtime.rejected.length, 0);
+  }
+
+  const legacyRuntime = new InteractionRuntime();
+  await handleCodexServerRequest({
+    agents: { get: id => id === agent.id ? agent : null },
+    approval: { async request() { return "allowed-once"; } },
+    userQuestions: { async ask() { throw new Error("unexpected question"); } },
+  }, {
+    adapter,
+    runtime: legacyRuntime,
+    request: {
+      id: "legacy-approval",
+      method: "execCommandApproval",
+      params: {
+        conversationId: "thread-1",
+        callId: "legacy-call",
+        command: ["git", "status"],
+      },
+    },
+  });
+  assert.deepEqual(legacyRuntime.resolved, [{
+    id: "legacy-approval",
+    response: { action: "accept" },
+  }]);
+
+  const missingOwnerRuntime = new InteractionRuntime();
+  let approvalCalls = 0;
+  await handleCodexServerRequest({
+    agents: { get() { return null; } },
+    approval: { async request() { approvalCalls += 1; return "allowed-once"; } },
+    userQuestions: { async ask() { throw new Error("unexpected question"); } },
+  }, {
+    adapter,
+    runtime: missingOwnerRuntime,
+    request: request("unowned-approval", "item/commandExecution/requestApproval", {
+      threadId: "unowned-thread",
+      turnId: "unowned-turn",
+      itemId: "unowned-item",
+      command: "git status",
+    }),
+  });
+  assert.equal(approvalCalls, 0);
+  assert.equal(missingOwnerRuntime.resolved.length, 0);
+  assert.match(missingOwnerRuntime.rejected[0].error.message, /no owning live DSH Session/);
+});
+
 test("disconnect/reconnect stale approval replay fails closed when its Session binding changes", async () => {
   const agent = fakeAgent({ id: "dsh-approval-child" });
   const adapterRuntime = new FakeRuntime();

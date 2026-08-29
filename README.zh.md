@@ -227,8 +227,9 @@ fork 通过 Codex App Server 的 `thread/fork` 实现。子 DSH Session 会提�
 Codex Thread、Turn、Item、request 和绑定代次；任何不匹配都会拒绝旧 approval，
 并保留可诊断的来源信息。
 
-完整约束见[可靠性规范](docs/reliability-spec.md)与
-[可执行验收矩阵](docs/reliability-acceptance.md)。
+完整约束见[可靠性规范](docs/reliability-spec.md)、
+[可执行验收矩阵](docs/reliability-acceptance.md)以及审批与结构化提问的
+[DSH 交互桥接规范](docs/spec/dsh-interaction-bridge.md)。
 
 ## 插件边界及与 Relay 的关系
 
