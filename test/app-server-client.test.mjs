@@ -120,6 +120,7 @@ test("initialization advertises native Codex Desktop capabilities by default", a
     "  if (!capabilities.extensions?.['io.modelcontextprotocol/ui']?.mimeTypes?.includes('text/html+skybridge')) process.exit(11)",
     "  if (!capabilities.optOutNotificationMethods?.includes('codex/event/task_started')) process.exit(12)",
     "  if (capabilities.optOutNotificationMethods?.includes('command/exec/outputDelta')) process.exit(13)",
+    "  if (capabilities.optOutNotificationMethods?.includes('rawResponseItem/completed')) process.exit(14)",
     "  process.stdout.write(JSON.stringify({ id: message.id, result: { userAgent: 'fixture' } }) + '\\n')",
     "})",
   ].join("\n");

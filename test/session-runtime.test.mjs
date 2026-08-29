@@ -31,6 +31,7 @@ test("Codex threads keep their context across turns, switching, and resume", asy
   assert.deepEqual(firstStart.params.runtimeWorkspaceRoots, ["/workspace/relay"]);
   assert.deepEqual(firstStart.params.config, { "features.realtime_conversation": false });
   assert.equal(firstStart.params.personality, "friendly");
+  assert.equal(firstStart.params.experimentalRawEvents, true);
   assert.deepEqual(client.requests.find(request => request.method === "thread/resume").params.dynamicTools, tools);
   const firstTurn = client.requests.find(request => request.method === "turn/start");
   assert.deepEqual(firstTurn.params.input, [{ type: "text", text: "first turn", text_elements: [] }]);
@@ -207,6 +208,57 @@ test("App Server notifications remain incremental and server requests remain int
   assert.equal(runtime.snapshot().pendingRequests.length, 1);
   await runtime.resolveRequest("approval-1", { action: "accept" });
   assert.deepEqual(client.responses.at(-1), { id: "approval-1", result: { decision: "accept" } });
+  await runtime.close();
+});
+
+test("raw response items expose only validated active code-mode shell output", async () => {
+  const client = new FakeCodexClient();
+  const runtime = new CodexSessionRuntime({ client, cwd: "/workspace/relay" });
+  const activity = [];
+  runtime.on("activity", message => activity.push(message));
+  await runtime.initialize();
+  const session = await runtime.createSession();
+  const base = { threadId: session.id, turnId: "turn-raw-shell" };
+
+  client.notify("rawResponseItem/completed", {
+    ...base,
+    item: { type: "message", role: "developer", content: [{ type: "input_text", text: "private" }] },
+  });
+  client.notify("rawResponseItem/completed", {
+    ...base,
+    item: { type: "custom_tool_call", call_id: "other-1", name: "other", input: "text('ignore')" },
+  });
+  client.notify("rawResponseItem/completed", {
+    ...base,
+    item: { type: "custom_tool_call_output", call_id: "other-1", output: "{\"session_id\":7,\"wall_time_seconds\":1,\"output\":\"ignore\"}" },
+  });
+  client.notify("rawResponseItem/completed", {
+    ...base,
+    item: { type: "custom_tool_call", call_id: "exec-1", name: "exec", input: "code mode" },
+  });
+  client.notify("rawResponseItem/completed", {
+    ...base,
+    item: {
+      type: "custom_tool_call_output",
+      call_id: "exec-1",
+      output: [
+        { type: "input_text", text: "Script running" },
+        { type: "encrypted_content", encrypted_content: "private" },
+        { type: "input_text", text: "{\"session_id\":7319,\"wall_time_seconds\":1.1,\"output\":\"FIRST\\n\"}" },
+      ],
+    },
+  });
+
+  assert.deepEqual(activity, [{
+    method: "item/codeModeShell/outputDelta",
+    params: {
+      threadId: session.id,
+      turnId: "turn-raw-shell",
+      processId: "7319",
+      delta: "FIRST\n",
+    },
+  }]);
+  assert.equal(JSON.stringify(activity).includes("private"), false);
   await runtime.close();
 });
 
@@ -465,6 +517,7 @@ test("ephemeral auxiliary threads carry isolated instructions and are released",
   });
   const start = client.requests.find(request => request.method === "thread/start");
   assert.equal(start.params.ephemeral, true);
+  assert.equal(start.params.experimentalRawEvents, false);
   assert.equal(start.params.baseInstructions, "Generate a title.");
   assert.equal(start.params.developerInstructions, "Do not call tools.");
   assert.deepEqual(start.params.dynamicTools, []);

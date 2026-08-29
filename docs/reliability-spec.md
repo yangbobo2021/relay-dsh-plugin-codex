@@ -158,6 +158,46 @@ The Turn is reported as aborted only after targeted cleanup and
 `CODEX_TURN_INTERRUPT_CLEANUP_FAILED`, tells the user to check for late Workspace
 side effects, and logs only the stable code plus Thread and Turn identifiers.
 
+## Command output streaming
+
+App Server shell output belongs to the user-visible Codex response even though the
+command is executed inside Codex rather than by the DSH tool dispatcher. Code mode
+returns the first yielded bytes in a raw `custom_tool_call_output`, while later PTY
+bytes also arrive as native `item/commandExecution/outputDelta` notifications. New
+durable plugin-owned Threads opt into raw response items; ephemeral auxiliary Threads
+do not. The runtime never forwards a raw item: it correlates only `exec` call/output pairs, parses structured text results, and
+projects only a non-empty result containing `session_id`, `wall_time_seconds`, and
+`output`. Raw messages, prompts, reasoning, encrypted content, unrelated tools,
+malformed results, and completed results without a live `session_id` remain private.
+
+The adapter correlates the sanitized first yield and native command notifications by
+`session_id`/`processId`, then emits one ordered DSH text block. Cross-source overlap
+is removed by cumulative byte position so a byte reported by both sources appears
+once while legitimately repeated native output remains repeated. It must not emit a
+DSH `tool-call` chunk, because doing so would ask the DSH Agent to execute the
+already-running command a second time.
+
+All deltas for one process share one block and retain App Server order. For native-only
+commands, the completed item's `aggregatedOutput` is the authoritative settled value:
+a missing suffix is appended without duplicating the streamed prefix, while a
+non-prefix final snapshot replaces the block value at close. For a code-mode process,
+the aggregate covers only the native PTY side and cannot erase an earlier sanitized
+yield. A completed item with no preceding delta still emits its non-empty aggregate.
+Empty output emits no block. Late deltas after completion are ignored.
+
+The command output blocks are persisted in the assembled assistant message alongside
+Codex commentary and the final answer. This uses DSH's core stream and persistence
+vocabulary, survives Session reload, and remains readable if the Session later changes
+backend. It does not reintroduce plugin-private Session events, which the current DSH
+persistence catalog cannot safely adopt across reloads.
+
+`experimentalRawEvents` is immutable App Server Thread creation state in the pinned
+runtime: resume, settings update, and fork cannot enable it for a Thread created by an
+older plugin version. Such Sessions continue to receive native command deltas, but
+complete first-yield streaming requires a new DSH Session created after this feature
+is installed. The plugin must not silently replace or summarize an existing Codex
+Thread because that would weaken its model-context continuity.
+
 ## Platform contract
 
 The bundled launcher supports darwin, linux, and win32 on arm64 and x64 using

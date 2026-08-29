@@ -206,6 +206,7 @@ manual refresh action.
 - One persistent Codex App Server Thread per DSH Session
 - Model and reasoning-effort selection
 - Streaming answers and reasoning in the native DSH conversation
+- Live output from long-running Codex shell commands in newly created Sessions, retained in DSH history
 - DSH approval and user-question flows
 - Images, interruption, and continuation
 - Generic DSH tools exposed under the Codex App Server `dsh` namespace

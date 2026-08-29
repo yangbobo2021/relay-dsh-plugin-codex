@@ -194,6 +194,7 @@ Session 前就必须可用；批量导入时间不会覆盖 Codex inventory 的
 - 每个 DSH Session 持续绑定一个 Codex App Server Thread
 - 模型和 reasoning effort 选择
 - 在 DSH 原生对话中流式显示回答和 reasoning
+- 在新建 Session 中实时显示长时间运行的 Codex Shell 命令输出，并保留在 DSH 历史中
 - DSH 原生审批和用户提问流程
 - 图片、中断和会话延续
 - 在 Codex App Server 的 `dsh` namespace 中提供通用 DSH 工具

@@ -633,7 +633,20 @@ export class CodexDshAdapter extends LlmAdapter {
     if (message.method === "item/agentMessage/delta") {
       return textDelta(state, params.itemId, "text", params.delta ?? "");
     }
+    if (message.method === "item/codeModeShell/outputDelta") {
+      const key = commandProcessKey(params.processId);
+      if (state.closedCommands.has(key)) return [];
+      return commandOutputDelta(state, key, "raw", params.delta ?? "");
+    }
+    if (message.method === "item/commandExecution/outputDelta") {
+      if (state.completed.has(params.itemId)) return [];
+      const key = state.commandKeys.get(params.itemId) ?? commandItemKey(params.itemId);
+      return commandOutputDelta(state, key, "native", params.delta ?? "");
+    }
     if (message.method === "item/started") {
+      if (params.item?.type === "commandExecution") {
+        state.commandKeys.set(params.item.id, commandOutputKey(params.item));
+      }
       return [];
     }
     if (message.method === "item/completed") {
@@ -650,6 +663,11 @@ export class CodexDshAdapter extends LlmAdapter {
     }
     if (item.type === "agentMessage") {
       return completeTextItem(state, item.id, "text", item.text ?? "");
+    }
+    if (item.type === "commandExecution") {
+      const key = state.commandKeys.get(item.id) ?? commandOutputKey(item);
+      state.closedCommands.add(key);
+      return completeCommandOutput(state, key, item.aggregatedOutput);
     }
     if (item.type === "imageGeneration" || item.type === "imageView") {
       if (!this.attachments) return [];
@@ -872,6 +890,9 @@ function createStreamState() {
     nextIndex: 0,
     blocks: new Map(),
     completed: new Set(),
+    commandKeys: new Map(),
+    commandSources: new Map(),
+    closedCommands: new Set(),
   };
 }
 
@@ -909,6 +930,71 @@ function completeTextItem(state, id, type, completeText) {
     chunks.push({ type: "block-end", index: block.index, block: { type, text: block.text } });
   }
   return chunks;
+}
+
+function completeCommandOutput(state, id, aggregatedOutput) {
+  const completeText = typeof aggregatedOutput === "string" ? aggregatedOutput : "";
+  const sources = state.commandSources.get(id);
+  const chunks = [];
+  if (sources && completeText.startsWith(sources.native)) {
+    const suffix = completeText.slice(sources.native.length);
+    if (suffix) chunks.push(...commandOutputDelta(state, id, "native", suffix));
+  }
+  let block = state.blocks.get(id);
+  if (!block && !completeText) return chunks;
+  if (!block) {
+    block = { index: state.nextIndex++, type: "text", text: "", closed: false };
+    state.blocks.set(id, block);
+    chunks.push({ type: "block-start", index: block.index, blockType: "text" });
+  }
+  if (block.closed) return chunks;
+  if (completeText.startsWith(block.text) && completeText.length > block.text.length) {
+    const delta = completeText.slice(block.text.length);
+    block.text = completeText;
+    chunks.push({ type: "text-delta", index: block.index, text: delta });
+  } else if (completeText && completeText !== block.text && !sources?.raw) {
+    block.text = completeText;
+  }
+  block.closed = true;
+  chunks.push({ type: "block-end", index: block.index, block: { type: "text", text: block.text } });
+  return chunks;
+}
+
+function commandOutputDelta(state, id, source, delta) {
+  if (!id || !delta) return [];
+  let sources = state.commandSources.get(id);
+  if (!sources) {
+    sources = { raw: "", native: "" };
+    state.commandSources.set(id, sources);
+  }
+  const previous = sources[source];
+  sources[source] += delta;
+  const other = sources[source === "raw" ? "native" : "raw"];
+  const comparable = other.startsWith(previous) ? other.slice(previous.length) : "";
+  const commonLength = commonPrefixLength(delta, comparable);
+  const duplicateLength = commonLength === delta.length || commonLength === comparable.length
+    ? commonLength
+    : 0;
+  return textDelta(state, id, "text", delta.slice(duplicateLength));
+}
+
+function commonPrefixLength(left, right) {
+  const limit = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < limit && left[index] === right[index]) index += 1;
+  return index;
+}
+
+function commandOutputKey(item) {
+  return item?.processId != null ? commandProcessKey(item.processId) : commandItemKey(item?.id);
+}
+
+function commandProcessKey(processId) {
+  return processId == null ? null : `command-process:${processId}`;
+}
+
+function commandItemKey(itemId) {
+  return itemId == null ? null : `command-item:${itemId}`;
 }
 
 function permissionConfiguration(events) {

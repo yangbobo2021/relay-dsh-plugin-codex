@@ -28,7 +28,6 @@ const NATIVE_CODEX_CAPABILITIES = {
   optOutNotificationMethods: [
     "thread/environment/connected",
     "thread/environment/disconnected",
-    "rawResponseItem/completed",
     "externalAgentConfig/import/progress",
     "thread/compacted",
     "windows/worldWritableWarning",

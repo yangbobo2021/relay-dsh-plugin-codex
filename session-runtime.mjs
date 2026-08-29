@@ -28,6 +28,7 @@ export class CodexSessionRuntime extends EventEmitter {
     this.sessions = new Map();
     this.appliedThreadSettings = new Map();
     this.pendingRequests = new Map();
+    this.codeModeCalls = new Map();
     this.models = [];
     this.account = null;
     this.selectedSessionId = null;
@@ -174,7 +175,7 @@ export class CodexSessionRuntime extends EventEmitter {
       serviceName,
       threadSource,
       mockExperimentalField: null,
-      experimentalRawEvents: false,
+      experimentalRawEvents: !ephemeral,
       dynamicTools,
       developerInstructions: developerInstructions ?? null,
     }));
@@ -548,6 +549,11 @@ export class CodexSessionRuntime extends EventEmitter {
 
   handleNotification(message) {
     const { method, params = {} } = message;
+    if (method === "rawResponseItem/completed") {
+      const projected = this.projectCodeModeShellOutput(params);
+      if (projected) this.emit("activity", projected);
+      return;
+    }
     const threadId = params.threadId ?? params.thread?.id ?? null;
     let session = threadId ? this.sessions.get(threadId) : null;
 
@@ -585,11 +591,45 @@ export class CodexSessionRuntime extends EventEmitter {
     if (method === "serverRequest/resolved") {
       this.pendingRequests.delete(String(params.requestId));
     }
+    if (method === "turn/completed") {
+      for (const [callId, owner] of this.codeModeCalls) {
+        if (owner.threadId === threadId && owner.turnId === params.turn?.id) {
+          this.codeModeCalls.delete(callId);
+        }
+      }
+    }
     if (method === "error") {
       this.addDiagnostic(params.error?.message ?? JSON.stringify(params));
     }
     this.emit("activity", structuredClone(message));
     this.emitChange();
+  }
+
+  projectCodeModeShellOutput(params) {
+    const item = params.item;
+    const callId = typeof item?.call_id === "string" ? item.call_id : null;
+    if (!callId || !params.threadId || !params.turnId) return null;
+    if (item.type === "custom_tool_call") {
+      if (item.name === "exec") {
+        this.codeModeCalls.set(callId, { threadId: params.threadId, turnId: params.turnId });
+      }
+      return null;
+    }
+    if (item.type !== "custom_tool_call_output") return null;
+    const owner = this.codeModeCalls.get(callId);
+    this.codeModeCalls.delete(callId);
+    if (!owner || owner.threadId !== params.threadId || owner.turnId !== params.turnId) return null;
+    const result = codeModeShellYield(item.output);
+    if (!result) return null;
+    return {
+      method: "item/codeModeShell/outputDelta",
+      params: {
+        threadId: params.threadId,
+        turnId: params.turnId,
+        processId: String(result.session_id),
+        delta: result.output,
+      },
+    };
   }
 
   handleServerRequest(request) {
@@ -846,6 +886,30 @@ function deltaPlaceholder(method, itemId) {
     return { type: "plan", id: itemId, text: "" };
   }
   return { type: "agentMessage", id: itemId, text: "", phase: "commentary" };
+}
+
+function codeModeShellYield(output) {
+  const entries = typeof output === "string"
+    ? [output]
+    : Array.isArray(output)
+      ? output.filter(item => item?.type === "input_text").map(item => item.text)
+      : [];
+  for (const entry of entries) {
+    if (typeof entry !== "string") continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(entry);
+    } catch {
+      continue;
+    }
+    if (Number.isInteger(parsed?.session_id)
+      && typeof parsed?.wall_time_seconds === "number"
+      && typeof parsed?.output === "string"
+      && parsed.output) {
+      return parsed;
+    }
+  }
+  return null;
 }
 
 function publicSession(session) {

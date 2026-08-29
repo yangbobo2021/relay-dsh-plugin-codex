@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { BlockAssembler, createMessage } from "@deepseek-ai/dsh-llm";
+import { Session, SessionId } from "@deepseek-ai/dsh-session";
+
 import {
   CODEX_THREAD_ACTIVE_WRITER,
   CodexDshAdapter,
@@ -41,7 +44,8 @@ test("the Codex preset streams reasoning and answers into the native DSH convers
   assert.equal(runtime.sent[0].message.model, "codex-test");
   assert.equal(runtime.sent[0].message.reasoningSummary, "auto");
   assert.equal(chunks.find(chunk => chunk.type === "reasoning-delta").text, "Checked the workspace.");
-  assert.equal(chunks.find(chunk => chunk.type === "text-delta").text, "done");
+  assert.ok(chunks.some(chunk => chunk.type === "text-delta" && chunk.text === "ok\n"));
+  assert.ok(chunks.some(chunk => chunk.type === "text-delta" && chunk.text === "done"));
   assert.equal(chunks.at(-1).replayState.threadId, "thread-1");
   assert.deepEqual([...adapter.ownedTurnIdsForSession(agent.id)], []);
   assert.deepEqual(agent.appended, []);
@@ -67,6 +71,107 @@ test("an empty App Server reasoning item creates no empty DSH disclosure", async
   assert.equal(chunks.some(chunk => chunk.blockType === "reasoning" || chunk.block?.type === "reasoning"), false);
   assert.equal(chunks.filter(chunk => chunk.type === "text-delta").map(chunk => chunk.text).join(""), "done");
   assert.equal(chunks.at(-1).reason.kind, "stop");
+});
+
+test("command output streams before completion and settles without duplication", async () => {
+  const runtime = new StreamingCommandRuntime();
+  const adapter = new CodexDshAdapter({ runtime, ready: Promise.resolve() });
+  const agent = fakeAgent();
+  adapter.attachAgent(agent);
+  const iterator = adapter.stream({
+    provider: "relay-codex",
+    model: "codex-test",
+    sessionId: agent.id,
+    messages: [{
+      role: "user",
+      source: { kind: "user" },
+      content: [{ type: "text", text: "run the delayed marker command" }],
+    }],
+  })[Symbol.asyncIterator]();
+
+  const chunks = [];
+  let firstMarker = null;
+  while (!firstMarker) {
+    const next = await iterator.next();
+    assert.equal(next.done, false, "stream ended before the first command marker");
+    chunks.push(next.value);
+    if (next.value.type === "text-delta" && next.value.text.includes("STREAM_FIRST_4102")) {
+      firstMarker = next.value;
+    }
+  }
+  assert.equal(runtime.commandCompleted, false, "first marker was delayed until command completion");
+
+  for (;;) {
+    const next = await iterator.next();
+    if (next.done) break;
+    chunks.push(next.value);
+  }
+
+  const commandBlock = chunks.find(chunk =>
+    chunk.type === "block-end"
+      && chunk.block?.type === "text"
+      && chunk.block.text.includes("STREAM_FIRST_4102"));
+  assert.equal(commandBlock.block.text, "STREAM_FIRST_4102\nREPEATED_LINE\nREPEATED_LINE\nSTREAM_LAST_8604\n");
+  assert.equal(commandBlock.block.text.match(/STREAM_FIRST_4102/g)?.length, 1);
+  assert.equal(commandBlock.block.text.match(/STREAM_LAST_8604/g)?.length, 1);
+  assert.equal(commandBlock.block.text.match(/REPEATED_LINE/g)?.length, 2);
+  assert.equal(chunks.filter(chunk => chunk.type === "text-delta" && chunk.text === "done").length, 1);
+  assert.equal(chunks.some(chunk => chunk.blockType === "tool-call" || chunk.block?.type === "tool-call"), false);
+  assert.equal(chunks.filter(chunk => chunk.type === "finish").length, 1);
+  assert.equal(chunks.at(-1).reason.kind, "stop");
+
+  const assembler = new BlockAssembler();
+  for (const chunk of chunks) assembler.push(chunk);
+  assert.deepEqual(assembler.message().content, [
+    { type: "text", text: "STREAM_FIRST_4102\nREPEATED_LINE\nREPEATED_LINE\nSTREAM_LAST_8604\n" },
+    { type: "text", text: "done" },
+  ]);
+
+  const persisted = Session.create(SessionId("command-output-persistence"));
+  persisted.append("turn/start", { turn: 1 });
+  persisted.append("assistant/message", {
+    turn: 1,
+    step: 1,
+    message: createMessage({
+      role: "assistant",
+      content: assembler.message().content,
+      source: { kind: "model", provider: "relay-codex", model: "codex-test" },
+    }),
+  }, { surfaceOp: "append" });
+  persisted.append("turn/end", { turn: 1, reason: { kind: "completed" } });
+  const stored = JSON.parse(JSON.stringify({ header: persisted.header, events: persisted.events }));
+  const reloaded = Session.fromRestore(SessionId("command-output-persistence"), stored.events, stored.header);
+  assert.deepEqual(reloaded.deriveMessages()[0].content, assembler.message().content);
+});
+
+test("command completion backfills output, reconciles snapshots, and ignores empty or late data", async () => {
+  const runtime = new CommandCompletionRuntime();
+  const adapter = new CodexDshAdapter({ runtime, ready: Promise.resolve() });
+  const agent = fakeAgent();
+  adapter.attachAgent(agent);
+
+  const chunks = await collect(adapter.stream({
+    provider: "relay-codex",
+    model: "codex-test",
+    sessionId: agent.id,
+    messages: [{
+      role: "user",
+      source: { kind: "user" },
+      content: [{ type: "text", text: "exercise command completion edges" }],
+    }],
+  }));
+
+  const assembler = new BlockAssembler();
+  for (const chunk of chunks) assembler.push(chunk);
+  assert.deepEqual(assembler.message().content, [
+    { type: "text", text: "COMPLETION_ONLY\n" },
+    { type: "text", text: "CROSS_SOURCE_SAME\n" },
+    { type: "text", text: "AUTHORITATIVE_FINAL\n" },
+    { type: "text", text: "done" },
+  ]);
+  assert.equal(JSON.stringify(assembler.message()).match(/CROSS_SOURCE_SAME/g)?.length, 1);
+  assert.equal(chunks.some(chunk => JSON.stringify(chunk).includes("LATE_DELTA")), false);
+  assert.equal(chunks.filter(chunk => chunk.type === "block-start").length, 4);
 });
 
 test("an unconfirmed command cleanup is surfaced instead of reporting a successful stop", async () => {
@@ -396,7 +501,7 @@ test("automatic title generation uses an isolated ephemeral Codex thread", async
   assert.equal(mainCall.message.reasoningSummary, "auto");
   assert.equal(titleCall.message.reasoningSummary, "none");
   assert.deepEqual(runtime.released, [titleCall.threadId]);
-  assert.equal(mainChunks.find(chunk => chunk.type === "text-delta").text, "done");
+  assert.ok(mainChunks.some(chunk => chunk.type === "text-delta" && chunk.text === "done"));
   assert.equal(titleChunks.find(chunk => chunk.type === "text-delta").text, "项目文件查询");
   assert.deepEqual(agent.appended, []);
 });
@@ -1366,6 +1471,172 @@ class EmptyReasoningRuntime extends FakeRuntime {
         threadId,
         turn: { id: turnId, status: "completed", error: null, items: [] },
       } });
+    });
+    return { id: turnId, status: "inProgress", items: [] };
+  }
+}
+
+class StreamingCommandRuntime extends FakeRuntime {
+  constructor() {
+    super();
+    this.commandCompleted = false;
+  }
+
+  async sendMessage(threadId, message) {
+    this.sent.push({ threadId, message });
+    const turnId = "turn-streaming-command";
+    queueMicrotask(() => {
+      this.emit("activity", notification("item/started", threadId, turnId, {
+        item: {
+          type: "commandExecution",
+          id: "command-streaming",
+          processId: "4102",
+          command: "printf first; sleep; printf last",
+          status: "inProgress",
+        },
+      }));
+      this.emit("activity", notification("item/codeModeShell/outputDelta", threadId, turnId, {
+        processId: "4102",
+        delta: "STREAM_FIRST_4102\n",
+      }));
+      this.emit("activity", notification("item/commandExecution/outputDelta", threadId, turnId, {
+        itemId: "command-streaming",
+        delta: "REPEATED_LINE\n",
+      }));
+      this.emit("activity", notification("item/commandExecution/outputDelta", threadId, turnId, {
+        itemId: "command-streaming",
+        delta: "REPEATED_LINE\n",
+      }));
+      setTimeout(() => {
+        this.emit("activity", notification("item/commandExecution/outputDelta", threadId, turnId, {
+          itemId: "command-streaming",
+          delta: "STREAM_LAST_8604\n",
+        }));
+        this.commandCompleted = true;
+        const command = {
+          type: "commandExecution",
+          id: "command-streaming",
+          processId: "4102",
+          command: "printf first; sleep; printf last",
+          status: "completed",
+          exitCode: 0,
+          aggregatedOutput: "STREAM_LAST_8604\n",
+        };
+        this.emit("activity", notification("item/completed", threadId, turnId, { item: command }));
+        this.emit("activity", notification("item/agentMessage/delta", threadId, turnId, {
+          itemId: "answer-streaming-command",
+          delta: "done",
+        }));
+        const answer = {
+          type: "agentMessage",
+          id: "answer-streaming-command",
+          text: "done",
+          phase: "final_answer",
+        };
+        this.emit("activity", notification("item/completed", threadId, turnId, { item: answer }));
+        this.emit("activity", {
+          method: "turn/completed",
+          params: {
+            threadId,
+            turn: { id: turnId, status: "completed", error: null, items: [command, answer] },
+          },
+        });
+      }, 30);
+    });
+    return { id: turnId, status: "inProgress", items: [] };
+  }
+}
+
+class CommandCompletionRuntime extends FakeRuntime {
+  async sendMessage(threadId, message) {
+    this.sent.push({ threadId, message });
+    const turnId = "turn-command-completion";
+    queueMicrotask(() => {
+      const completionOnly = {
+        type: "commandExecution",
+        id: "command-completion-only",
+        command: "printf completion-only",
+        status: "completed",
+        exitCode: 0,
+        aggregatedOutput: "COMPLETION_ONLY\n",
+      };
+      this.emit("activity", notification("item/completed", threadId, turnId, { item: completionOnly }));
+
+      const empty = {
+        type: "commandExecution",
+        id: "command-empty",
+        command: "true",
+        status: "completed",
+        exitCode: 0,
+        aggregatedOutput: "",
+      };
+      this.emit("activity", notification("item/completed", threadId, turnId, { item: empty }));
+
+      this.emit("activity", notification("item/started", threadId, turnId, {
+        item: {
+          type: "commandExecution",
+          id: "command-cross-source-duplicate",
+          processId: "duplicate-process",
+          command: "printf same",
+          status: "inProgress",
+        },
+      }));
+      this.emit("activity", notification("item/codeModeShell/outputDelta", threadId, turnId, {
+        processId: "duplicate-process",
+        delta: "CROSS_SOURCE_SAME\n",
+      }));
+      this.emit("activity", notification("item/commandExecution/outputDelta", threadId, turnId, {
+        itemId: "command-cross-source-duplicate",
+        delta: "CROSS_SOURCE_SAME\n",
+      }));
+      const duplicate = {
+        type: "commandExecution",
+        id: "command-cross-source-duplicate",
+        processId: "duplicate-process",
+        command: "printf same",
+        status: "completed",
+        exitCode: 0,
+        aggregatedOutput: "CROSS_SOURCE_SAME\n",
+      };
+      this.emit("activity", notification("item/completed", threadId, turnId, { item: duplicate }));
+
+      this.emit("activity", notification("item/commandExecution/outputDelta", threadId, turnId, {
+        itemId: "command-reconciled",
+        delta: "STALE_PARTIAL",
+      }));
+      const reconciled = {
+        type: "commandExecution",
+        id: "command-reconciled",
+        command: "replace output",
+        status: "completed",
+        exitCode: 0,
+        aggregatedOutput: "AUTHORITATIVE_FINAL\n",
+      };
+      this.emit("activity", notification("item/completed", threadId, turnId, { item: reconciled }));
+      this.emit("activity", notification("item/commandExecution/outputDelta", threadId, turnId, {
+        itemId: "command-reconciled",
+        delta: "LATE_DELTA",
+      }));
+
+      const answer = {
+        type: "agentMessage",
+        id: "answer-command-completion",
+        text: "done",
+        phase: "final_answer",
+      };
+      this.emit("activity", notification("item/completed", threadId, turnId, { item: answer }));
+      this.emit("activity", {
+        method: "turn/completed",
+        params: {
+          threadId,
+          turn: {
+            id: turnId,
+            status: "completed",
+            error: null,
+            items: [completionOnly, empty, duplicate, reconciled, answer],
+          },
+        },
+      });
     });
     return { id: turnId, status: "inProgress", items: [] };
   }
