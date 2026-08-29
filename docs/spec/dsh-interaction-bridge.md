@@ -26,6 +26,22 @@ requests carry the same identity as `conversationId`. The adapter normalizes
 both forms and must resolve that id to one live DSH Session and Agent before
 invoking a DSH interaction service. Modern `itemId` and legacy `callId` are
 normalized into the same ownership slot.
+
+Subagent requests carry the descendant Thread id rather than the root Thread id.
+During the root Turn, the adapter observes `subAgentActivity.agentThreadId` as the
+child of the notification's enclosing `threadId` and records that edge with the
+current root binding epoch. App Server inventory can also identify the root through
+shared `sessionId` and each edge through `parentThreadId`, but that durable inventory
+is not authorization because it may be absent before the request or outlive the Turn.
+The adapter must prove the complete acyclic observed parent chain to a currently
+bound root before routing a descendant dynamic tool, approval, or question through
+that root's DSH Agent.
+Matching cwd, title, model, or recency is never sufficient ownership evidence.
+
+An observed edge is valid only for its root Turn and binding epoch. Turn completion,
+Agent detach, conflicting parent observations, a missing edge, or a root rebind makes
+the descendant fail closed without DSH tool execution.
+
 Approval ownership includes the DSH Session, Codex Thread, Turn, Item, App
 Server request id, and binding epoch. Unknown, stale, re-bound, or unowned
 requests are rejected without asking the user or executing the operation.
@@ -68,3 +84,9 @@ pending request. Unsupported interaction methods are rejected.
    absent. Both Sessions finish normally and remain usable.
 5. The historical pre-fix plugin commit must reproduce the missing approval UI
    and automatic fail-closed response for the same request shape.
+6. Subagent tests emit App Server-shaped `subAgentActivity` notifications while the
+   root Turn remains live, cover direct and nested descendants plus duplicate,
+   conflicting, unbound, orphaned, cyclic, stale, expired, and cross-Session trees,
+   and assert rejected trees execute zero DSH tools. An official DSH Web regression
+   proves one child reads the exact oracle through the DSH tool bridge and returns it
+   to the owning parent without a parent-side read.

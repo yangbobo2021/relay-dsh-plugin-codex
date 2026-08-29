@@ -83,6 +83,25 @@ Thread, Turn, and Item.
 DSH may replay the same still-pending approval rpc id after a browser
 disconnect. That replay is safe only while the ownership tuple remains valid.
 
+## Subagent interaction ownership
+
+A Codex subagent Thread does not receive an independent DSH Session binding. While
+the root Turn is active, App Server emits `subAgentActivity` items whose enclosing
+`threadId` is the parent and whose `agentThreadId` is the spawned child. The adapter
+records those observed edges with the root binding epoch. Thread inventory metadata
+is not treated as authorization because it may be absent before the interaction or
+outlive the Turn that created the child. Dynamic tools, approvals,
+and structured questions from a descendant may use the root DSH Agent only after the
+adapter proves an acyclic observed parent chain from the requesting
+Thread to the currently bound root Thread.
+
+Resolution never uses cwd, title, recency, or model as ownership evidence. An unknown
+Thread, missing parent, cycle, inconsistent shared Session, unbound root, disposed DSH
+Agent, changed binding epoch, or rebind-required root fails closed. A descendant uses
+only the DSH tool names captured for the owning root Turn; it cannot gain a capability
+that was absent from that Turn. Observed edges are released when the root Turn ends or
+the DSH Agent detaches. Conflicting observations permanently reject that child identity.
+
 ## Reasoning summary presentation
 
 Business Turns request App Server reasoning summaries with `summary: auto`.

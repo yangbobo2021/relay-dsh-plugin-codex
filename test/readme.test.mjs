@@ -63,12 +63,15 @@ test('reliability spec, READMEs, and acceptance matrix describe the implemented 
   assert.match(reliabilitySpec, /connection-failed/)
   assert.match(reliabilitySpec, /CODEX_STALE_APPROVAL/)
   assert.match(reliabilitySpec, /binding epoch/)
+  assert.match(reliabilitySpec, /Subagent interaction ownership/)
   assert.match(
     reliabilityAcceptance,
     /disconnect\s*\/\s*pending approval\s*\/\s*reconnect/i,
   )
   assert.match(reliabilityAcceptance, /b150a551/)
   assert.match(interactionSpec, /required Host injections/)
+  assert.match(interactionSpec, /subAgentActivity\.agentThreadId/)
+  assert.match(interactionSpec, /complete acyclic[\s\S]+parent chain/)
   assert.match(english, /DSH interaction bridge specification/)
   assert.match(chinese, /DSH 交互桥接规范/)
 })

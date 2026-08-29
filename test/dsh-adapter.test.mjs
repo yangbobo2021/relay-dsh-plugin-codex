@@ -1390,6 +1390,245 @@ test("Codex exposes and executes only the generic DSH tools assembled for the tu
   assert.match(interactions.dynamic.at(-1).text, /not available for this DSH turn/);
 });
 
+test("subagent activity routes descendant interactions only while the owning root Turn is live", async () => {
+  const calls = [];
+  const runtime = new SubagentActivityRuntime();
+  const agent = fakeAgent({
+    tools: {
+      async execute(input) {
+        calls.push(input);
+        return {
+          isError: false,
+          content: [{ type: "text", text: "CHILD_ORACLE_6842_ZKPT" }],
+        };
+      },
+    },
+  });
+  const adapter = new CodexDshAdapter({ runtime, ready: Promise.resolve() });
+  adapter.attachAgent(agent);
+  const stream = collect(adapter.stream({
+    provider: "relay-codex",
+    model: "codex-test",
+    sessionId: agent.id,
+    messages: [{ role: "user", source: { kind: "user" }, content: [{ type: "text", text: "delegate" }] }],
+    tools: [{
+      name: "read",
+      description: "Read a UTF-8 text file.",
+      parameters: {
+        type: "object",
+        properties: { file_path: { type: "string" } },
+        required: ["file_path"],
+        additionalProperties: false,
+      },
+    }],
+  }));
+  await runtime.activityObserved.promise;
+  assert.deepEqual(adapter.interactionBindingForThread("thread-child"), {
+    sessionId: agent.id,
+    rootThreadId: "thread-1",
+    requestThreadId: "thread-child",
+  });
+  assert.deepEqual(adapter.interactionBindingForThread("thread-grandchild"), {
+    sessionId: agent.id,
+    rootThreadId: "thread-1",
+    requestThreadId: "thread-grandchild",
+  });
+  const interactions = new InteractionRuntime();
+  const approvalCalls = [];
+  const questionCalls = [];
+  const ctx = {
+    agents: { get: id => id === agent.id ? agent : null },
+    approval: { async request(input) { approvalCalls.push(input); return "allowed-once"; } },
+    userQuestions: {
+      async ask(input) {
+        questionCalls.push(input);
+        return { answers: [{ id: "choice", selected: ["Continue"] }] };
+      },
+    },
+  };
+
+  for (const [id, threadId] of [["child-read", "thread-child"], ["nested-read", "thread-grandchild"]]) {
+    await handleCodexServerRequest(ctx, {
+      adapter,
+      runtime: interactions,
+      request: request(id, "item/dynamicTool/call", {
+        threadId,
+        namespace: "dsh",
+        name: "read",
+        arguments: { file_path: "subagent-fixture/child-oracle.txt" },
+      }),
+    });
+  }
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map(call => call.arguments), [
+    { file_path: "subagent-fixture/child-oracle.txt" },
+    { file_path: "subagent-fixture/child-oracle.txt" },
+  ]);
+  assert.ok(calls.every(call => call.agent === agent));
+  assert.deepEqual(interactions.dynamic, [
+    { id: "child-read", success: true, text: "CHILD_ORACLE_6842_ZKPT" },
+    { id: "nested-read", success: true, text: "CHILD_ORACLE_6842_ZKPT" },
+  ]);
+
+  await handleCodexServerRequest(ctx, {
+    adapter,
+    runtime: interactions,
+    request: request("child-approval", "item/commandExecution/requestApproval", {
+      threadId: "thread-child",
+      itemId: "child-command",
+      command: "printf child",
+    }),
+  });
+  await handleCodexServerRequest(ctx, {
+    adapter,
+    runtime: interactions,
+    request: request("child-question", "item/tool/requestUserInput", {
+      threadId: "thread-grandchild",
+      questions: [{ id: "choice", header: "Action", question: "Continue?" }],
+    }),
+  });
+  assert.equal(approvalCalls.length, 1);
+  assert.equal(approvalCalls[0].agent, agent);
+  assert.equal(questionCalls.length, 1);
+  assert.equal(questionCalls[0].agent, agent);
+  assert.deepEqual(interactions.resolved, [
+    { id: "child-approval", response: { action: "accept" } },
+    { id: "child-question", response: { answers: { choice: ["Continue"] } } },
+  ]);
+
+  assert.equal(adapter.observeSubagentActivity(notification("item/started", "thread-1", "turn-1", {
+    item: {
+      type: "subAgentActivity",
+      id: "duplicate-child",
+      agentThreadId: "thread-child",
+      kind: "started",
+    },
+  })), true);
+  assert.equal(adapter.observeSubagentActivity(notification("item/started", "thread-1", "turn-1", {
+    item: {
+      type: "subAgentActivity",
+      id: "conflicting-grandchild",
+      agentThreadId: "thread-grandchild",
+      kind: "started",
+    },
+  })), false);
+  await handleCodexServerRequest(ctx, {
+    adapter,
+    runtime: interactions,
+    request: request("reject-conflicting-grandchild", "item/dynamicTool/call", {
+      threadId: "thread-grandchild",
+      namespace: "dsh",
+      name: "read",
+      arguments: { file_path: "subagent-fixture/child-oracle.txt" },
+    }),
+  });
+  assert.equal(calls.length, 2);
+  assert.match(interactions.rejected.at(-1).error.message, /no owning live DSH Session/);
+
+  for (const [threadId, sessionId, parentThreadId] of [
+    ["unbound-child", "unbound-root", "unbound-root"],
+    ["orphan-child", "thread-1", null],
+    ["cyclic-child", "thread-1", "cyclic-child"],
+    ["cross-parent", "different-root", "thread-1"],
+    ["cross-child", "thread-1", "cross-parent"],
+  ]) {
+    runtime.sessions.set(threadId, { id: threadId, sessionId, parentThreadId });
+    await handleCodexServerRequest(ctx, {
+      adapter,
+      runtime: interactions,
+      request: request(`reject-${threadId}`, "item/dynamicTool/call", {
+        threadId,
+        namespace: "dsh",
+        name: "read",
+        arguments: { file_path: "subagent-fixture/child-oracle.txt" },
+      }),
+    });
+  }
+
+  assert.equal(calls.length, 2);
+  assert.equal(interactions.rejected.length, 6);
+  assert.ok(interactions.rejected.every(entry => /no owning live DSH Session/.test(entry.error.message)));
+
+  const approvalStarted = Promise.withResolvers();
+  let releaseApproval;
+  const stale = handleCodexServerRequest({
+    ...ctx,
+    approval: {
+      request() {
+        approvalStarted.resolve();
+        return new Promise(resolve => { releaseApproval = resolve; });
+      },
+    },
+  }, {
+    adapter,
+    runtime: interactions,
+    request: request("stale-child-approval", "item/commandExecution/requestApproval", {
+      threadId: "thread-child",
+      itemId: "stale-child-command",
+      command: "printf stale",
+    }),
+  });
+  await approvalStarted.promise;
+  adapter.releaseSubagentBindings(agent.id, "thread-1");
+  releaseApproval("allowed-once");
+  await stale;
+
+  assert.equal(interactions.resolved.some(entry => entry.id === "stale-child-approval"), false);
+  assert.equal(interactions.rejected.at(-1).error.code, "CODEX_STALE_APPROVAL");
+
+  assert.equal(adapter.observeSubagentActivity(notification("item/started", "thread-1", "turn-1", {
+    item: {
+      type: "subAgentActivity",
+      id: "restore-child",
+      agentThreadId: "thread-child",
+      kind: "started",
+    },
+  })), true);
+  const otherAgent = fakeAgent({ id: "dsh-2" });
+  adapter.attachAgent(otherAgent);
+  adapter.bindImportedThread(otherAgent.id, "thread-other", { cwd: otherAgent.session.header.cwd });
+  adapter.activeRootTurns.set("thread-other", 1);
+  assert.equal(adapter.observeSubagentActivity(notification("item/started", "thread-other", "turn-other", {
+    item: {
+      type: "subAgentActivity",
+      id: "cross-session-child",
+      agentThreadId: "thread-child",
+      kind: "started",
+    },
+  })), false);
+  await handleCodexServerRequest(ctx, {
+    adapter,
+    runtime: interactions,
+    request: request("reject-cross-session-observation", "item/dynamicTool/call", {
+      threadId: "thread-child",
+      namespace: "dsh",
+      name: "read",
+      arguments: { file_path: "subagent-fixture/child-oracle.txt" },
+    }),
+  });
+  assert.equal(calls.length, 2);
+  assert.match(interactions.rejected.at(-1).error.message, /no owning live DSH Session/);
+  adapter.activeRootTurns.delete("thread-other");
+  adapter.detachAgent(otherAgent.id);
+
+  runtime.finishTurn.resolve();
+  await stream;
+  assert.equal(adapter.activeRootTurns.has("thread-1"), false);
+  await handleCodexServerRequest(ctx, {
+    adapter,
+    runtime: interactions,
+    request: request("after-root-turn", "item/dynamicTool/call", {
+      threadId: "thread-child",
+      namespace: "dsh",
+      name: "read",
+      arguments: { file_path: "subagent-fixture/child-oracle.txt" },
+    }),
+  });
+  assert.equal(calls.length, 2);
+  assert.match(interactions.rejected.at(-1).error.message, /no owning live DSH Session/);
+});
+
 test("Relay exposes only the executable Codex app workspace dependency tool", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "relay-codex-runtime-"));
   const previousRuntimeRoot = process.env.CODEX_PRIMARY_RUNTIME_ROOT;
@@ -1405,7 +1644,7 @@ test("Relay exposes only the executable Codex app workspace dependency tool", as
   assert.deepEqual(codexAppNamespace.tools.map(tool => tool.name), ["load_workspace_dependencies"]);
 
   const agent = fakeAgent();
-  const adapter = { dshSessionForThread: threadId => threadId === "thread-1" ? agent.id : null };
+  const adapter = { dshSessionForInteractionThread: threadId => threadId === "thread-1" ? agent.id : null };
   const ctx = {
     agents: { get: id => id === agent.id ? agent : null },
     approval: { async request() { throw new Error("unexpected approval"); } },
@@ -1520,6 +1759,50 @@ class FakeRuntime extends EventEmitter {
   async releaseSession(threadId) {
     this.released.push(threadId);
     this.sessions.delete(threadId);
+  }
+}
+
+class SubagentActivityRuntime extends FakeRuntime {
+  constructor() {
+    super();
+    this.activityObserved = Promise.withResolvers();
+    this.finishTurn = Promise.withResolvers();
+  }
+
+  async sendMessage(threadId, message) {
+    this.sent.push({ threadId, message });
+    const turnId = "turn-1";
+    queueMicrotask(async () => {
+      this.emit("activity", notification("item/started", threadId, turnId, {
+        item: {
+          type: "subAgentActivity",
+          id: "spawn-child",
+          agentThreadId: "thread-child",
+          kind: "started",
+        },
+      }));
+      this.emit("activity", notification("item/started", "thread-child", "turn-child", {
+        item: {
+          type: "subAgentActivity",
+          id: "spawn-grandchild",
+          agentThreadId: "thread-grandchild",
+          kind: "started",
+        },
+      }));
+      this.activityObserved.resolve();
+      await this.finishTurn.promise;
+      this.emit("activity", notification("item/completed", threadId, turnId, {
+        item: { type: "agentMessage", id: "answer-1", text: "done", phase: "final_answer" },
+      }));
+      this.emit("activity", {
+        method: "turn/completed",
+        params: {
+          threadId,
+          turn: { id: turnId, status: "completed", error: null, items: [] },
+        },
+      });
+    });
+    return { id: turnId, status: "inProgress", items: [] };
   }
 }
 

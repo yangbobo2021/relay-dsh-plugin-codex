@@ -37,7 +37,7 @@ export function codexDynamicTools(dshTools = [], builtins = CODEX_APP_DYNAMIC_TO
 
 export async function handleCodexServerRequest(ctx, { adapter, runtime, request }) {
   const threadId = request.params?.threadId ?? request.params?.conversationId;
-  const sessionId = threadId ? adapter.dshSessionForThread(threadId) : null;
+  const sessionId = threadId ? adapter.dshSessionForInteractionThread(threadId) : null;
   const agent = sessionId ? ctx.agents.get(sessionId) : null;
   if (!agent) {
     runtime.rejectRequest(request.id, new Error("Codex request has no owning live DSH Session"));

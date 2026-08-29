@@ -43,6 +43,9 @@ export class CodexDshAdapter extends LlmAdapter {
     this.appliedDynamicToolSignatures = new Map();
     this.rebindStates = new Map();
     this.bindingEpochs = new Map();
+    this.subagentBindings = new Map();
+    this.subagentBindingConflicts = new Set();
+    this.activeRootTurns = new Map();
     for (const [sessionId, record] of linkStore?.entries() ?? []) {
       if (record.threadId) this.links.set(sessionId, record.threadId);
       this.settings.set(sessionId, record.config);
@@ -113,6 +116,7 @@ export class CodexDshAdapter extends LlmAdapter {
     this.agents.delete(key);
     this.dshToolNames.delete(key);
     this.appliedDynamicToolSignatures.delete(key);
+    this.releaseSubagentBindings(key);
     this.bumpBindingEpoch(key);
   }
 
@@ -401,6 +405,92 @@ export class CodexDshAdapter extends LlmAdapter {
     return null;
   }
 
+  interactionBindingForThread(threadId) {
+    const requestThreadId = optionalIdentity(threadId);
+    if (!requestThreadId) return null;
+    const directSessionId = this.dshSessionForThread(requestThreadId);
+    if (directSessionId) {
+      return Object.freeze({
+        sessionId: directSessionId,
+        rootThreadId: requestThreadId,
+        requestThreadId,
+      });
+    }
+
+    if (this.subagentBindingConflicts.has(requestThreadId)) return null;
+    const observed = this.subagentBindings.get(requestThreadId);
+    if (observed) {
+      const visited = new Set();
+      let currentThreadId = requestThreadId;
+      while (currentThreadId !== observed.rootThreadId) {
+        if (visited.has(currentThreadId) || this.subagentBindingConflicts.has(currentThreadId)) {
+          return null;
+        }
+        visited.add(currentThreadId);
+        const current = this.subagentBindings.get(currentThreadId);
+        if (!current
+          || current.sessionId !== observed.sessionId
+          || current.rootThreadId !== observed.rootThreadId
+          || current.epoch !== observed.epoch) {
+          return null;
+        }
+        currentThreadId = current.parentThreadId;
+      }
+      if (this.links.get(observed.sessionId) !== observed.rootThreadId
+        || (this.bindingEpochs.get(observed.sessionId) ?? 0) !== observed.epoch
+        || this.rebindStates.has(observed.sessionId)
+        || !this.activeRootTurns.has(observed.rootThreadId)) {
+        return null;
+      }
+      return Object.freeze({
+        sessionId: observed.sessionId,
+        rootThreadId: observed.rootThreadId,
+        requestThreadId,
+      });
+    }
+
+    return null;
+  }
+
+  observeSubagentActivity(message) {
+    if (message.method !== "item/started" && message.method !== "item/completed") return false;
+    const item = message.params?.item;
+    if (item?.type !== "subAgentActivity") return false;
+    const parentThreadId = optionalIdentity(message.params?.threadId);
+    const childThreadId = optionalIdentity(item.agentThreadId);
+    if (!parentThreadId || !childThreadId || parentThreadId === childThreadId) return false;
+    if (this.subagentBindingConflicts.has(childThreadId)) return false;
+    const parent = this.interactionBindingForThread(parentThreadId);
+    if (!parent) return false;
+    const next = Object.freeze({
+      sessionId: parent.sessionId,
+      rootThreadId: parent.rootThreadId,
+      parentThreadId,
+      epoch: this.bindingEpochs.get(parent.sessionId) ?? 0,
+    });
+    const current = this.subagentBindings.get(childThreadId);
+    if (current && !sameSubagentBinding(current, next)) {
+      this.subagentBindings.delete(childThreadId);
+      this.subagentBindingConflicts.add(childThreadId);
+      return false;
+    }
+    this.subagentBindings.set(childThreadId, next);
+    return true;
+  }
+
+  releaseSubagentBindings(sessionId, rootThreadId = null) {
+    const key = String(sessionId);
+    for (const [threadId, binding] of this.subagentBindings) {
+      if (binding.sessionId === key && (!rootThreadId || binding.rootThreadId === rootThreadId)) {
+        this.subagentBindings.delete(threadId);
+      }
+    }
+  }
+
+  dshSessionForInteractionThread(threadId) {
+    return this.interactionBindingForThread(threadId)?.sessionId ?? null;
+  }
+
   statusForSession(sessionId) {
     const status = this.rebindStates.get(String(sessionId));
     return status ? structuredClone(status) : null;
@@ -411,26 +501,29 @@ export class CodexDshAdapter extends LlmAdapter {
       request.params?.threadId ?? request.params?.conversationId,
       "threadId",
     );
-    const sessionId = this.dshSessionForThread(threadId);
-    if (!sessionId) throw requestOwnershipError(request, "has no owning DSH Session");
-    if (this.rebindStates.has(sessionId)) throw requestOwnershipError(request, "requires rebind");
+    const binding = this.interactionBindingForThread(threadId);
+    if (!binding) throw requestOwnershipError(request, "has no owning DSH Session");
+    if (this.rebindStates.has(binding.sessionId)) throw requestOwnershipError(request, "requires rebind");
     return Object.freeze({
       requestId: String(request.id),
-      sessionId,
+      sessionId: binding.sessionId,
       threadId,
+      rootThreadId: binding.rootThreadId,
       turnId: optionalIdentity(request.params?.turnId),
       itemId: optionalIdentity(request.params?.itemId ?? request.params?.callId),
-      epoch: this.bindingEpochs.get(sessionId) ?? 0,
+      epoch: this.bindingEpochs.get(binding.sessionId) ?? 0,
     });
   }
 
   assertRequestOwnership(ownership, request) {
-    const currentThread = this.links.get(ownership.sessionId);
+    const currentBinding = this.interactionBindingForThread(ownership.threadId);
     const currentEpoch = this.bindingEpochs.get(ownership.sessionId) ?? 0;
     const currentTurn = optionalIdentity(request.params?.turnId);
     const currentItem = optionalIdentity(request.params?.itemId ?? request.params?.callId);
     if (String(request.id) !== ownership.requestId
-      || currentThread !== ownership.threadId
+      || currentBinding?.sessionId !== ownership.sessionId
+      || currentBinding?.rootThreadId !== ownership.rootThreadId
+      || this.links.get(ownership.sessionId) !== ownership.rootThreadId
       || currentEpoch !== ownership.epoch
       || currentTurn !== ownership.turnId
       || currentItem !== ownership.itemId
@@ -479,10 +572,12 @@ export class CodexDshAdapter extends LlmAdapter {
     );
     const queue = new ActivityQueue(options.signal);
     const onActivity = (message) => {
+      this.observeSubagentActivity(message);
       const candidate = message.params?.threadId ?? message.params?.thread?.id;
       if (candidate === threadId) queue.push(message);
     };
     const stopActivity = subscribeRuntimeActivity(this.runtime, onActivity);
+    this.activeRootTurns.set(threadId, (this.activeRootTurns.get(threadId) ?? 0) + 1);
 
     let turnId = null;
     try {
@@ -538,6 +633,13 @@ export class CodexDshAdapter extends LlmAdapter {
     } finally {
       stopActivity();
       queue.close();
+      const activeTurns = this.activeRootTurns.get(threadId) ?? 0;
+      if (activeTurns <= 1) {
+        this.releaseSubagentBindings(sessionId, threadId);
+        this.activeRootTurns.delete(threadId);
+      } else {
+        this.activeRootTurns.set(threadId, activeTurns - 1);
+      }
     }
   }
 
@@ -1118,6 +1220,13 @@ function isRelayActivation(source) {
 
 function compact(value) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined && item !== null));
+}
+
+function sameSubagentBinding(left, right) {
+  return left.sessionId === right.sessionId
+    && left.rootThreadId === right.rootThreadId
+    && left.parentThreadId === right.parentThreadId
+    && left.epoch === right.epoch;
 }
 
 function runtimeModels(runtime) {

@@ -58,7 +58,7 @@ test("Codex interactions resolve through sibling DSH service providers", async (
   context.after(dispose);
   const runtime = new InteractionRuntime();
   const adapter = {
-    dshSessionForThread: id => id === "thread-1" ? agent.id : null,
+    dshSessionForInteractionThread: id => id === "thread-1" ? agent.id : null,
     captureRequestOwnership(request) {
       return { requestId: request.id, threadId: request.params.threadId };
     },
