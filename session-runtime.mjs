@@ -17,6 +17,13 @@ const IMPORT_THREAD_SOURCE_KINDS = Object.freeze([
   "cli", "vscode", "exec", "appServer", "unknown",
 ]);
 
+function newThreadConfig(bypassHookTrust) {
+  return {
+    "features.realtime_conversation": false,
+    ...(bypassHookTrust ? { bypass_hook_trust: true } : {}),
+  };
+}
+
 export class CodexSessionRuntime extends EventEmitter {
   constructor({
     client,
@@ -25,6 +32,7 @@ export class CodexSessionRuntime extends EventEmitter {
     super();
     this.client = client;
     this.cwd = cwd;
+    this.bypassHookTrust = client.bypassHookTrust === true;
     this.sessions = new Map();
     this.appliedThreadSettings = new Map();
     this.pendingRequests = new Map();
@@ -164,7 +172,7 @@ export class CodexSessionRuntime extends EventEmitter {
       model: selectedModel,
       modelProvider: null,
       serviceTier: null,
-      config: { "features.realtime_conversation": false },
+      config: newThreadConfig(this.bypassHookTrust),
       approvalsReviewer: "user",
       approvalPolicy,
       permissions: permissionProfile(selectedSandbox),
@@ -223,7 +231,7 @@ export class CodexSessionRuntime extends EventEmitter {
       model: selectedModel,
       modelProvider: null,
       serviceTier: null,
-      config: { "features.realtime_conversation": false },
+      config: newThreadConfig(this.bypassHookTrust),
       approvalsReviewer: "user",
       approvalPolicy,
       permissions: permissionProfile(selectedSandbox),
@@ -264,6 +272,7 @@ export class CodexSessionRuntime extends EventEmitter {
     const result = await this.client.request("thread/resume", {
       threadId,
       cwd: defaults.cwd ?? this.cwd,
+      ...(this.bypassHookTrust ? { config: { bypass_hook_trust: true } } : {}),
       ...(defaults.dynamicTools === undefined ? {} : { dynamicTools: defaults.dynamicTools }),
     });
     const session = this.upsertThread(result.thread, defaults);

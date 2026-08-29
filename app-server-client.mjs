@@ -18,6 +18,8 @@ export const RELAY_CODEX_APP_SERVER_ARGS = [
   "--analytics-default-enabled",
 ];
 
+const BYPASS_HOOK_TRUST_FLAG = "--dangerously-bypass-hook-trust";
+
 const NATIVE_CODEX_CAPABILITIES = {
   experimentalApi: true,
   extensions: {
@@ -113,6 +115,7 @@ export class CodexAppServerClient extends EventEmitter {
     this.command = launch.command;
     this.commandSource = launch.source;
     this.appServerArgs = [...args];
+    this.bypassHookTrust = args.includes(BYPASS_HOOK_TRUST_FLAG);
     this.args = [...launch.argsPrefix, ...args];
     this.requestTimeoutMs = requestTimeoutMs;
     this.clientInfo = structuredClone(clientInfo);

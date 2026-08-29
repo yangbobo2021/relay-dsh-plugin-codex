@@ -22,6 +22,21 @@ effective environment into durable files under `CODEX_HOME/shell_snapshots`. Exp
 operator-supplied App Server arguments remain an exact override and carry responsibility
 for any snapshot policy they enable.
 
+## Plugin Hook trust propagation
+
+Codex evaluates installed Plugin Hooks when each Thread is started, forked, or
+resumed. App Server launch arguments and Thread request configuration are separate
+configuration layers. Relay therefore mirrors an explicit standalone
+`--dangerously-bypass-hook-trust` launch argument into
+`config.bypass_hook_trust: true` on `thread/start`, `thread/fork`, and
+`thread/resume`, while preserving the operator's launch argument array exactly.
+
+This is an opt-in security exception. Relay never enables Hook trust bypass by
+default, never recognizes the flag as a substring of another argument, and never
+propagates unrelated launch configuration into Thread requests. Restarting without
+the exact flag removes the request-level override. Existing realtime, dynamic-tool,
+permission, resume, and fork settings remain unchanged.
+
 The observable state machine is:
 
 | State | Meaning | Required user behavior |

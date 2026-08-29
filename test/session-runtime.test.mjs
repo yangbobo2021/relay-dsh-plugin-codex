@@ -32,7 +32,9 @@ test("Codex threads keep their context across turns, switching, and resume", asy
   assert.deepEqual(firstStart.params.config, { "features.realtime_conversation": false });
   assert.equal(firstStart.params.personality, "friendly");
   assert.equal(firstStart.params.experimentalRawEvents, true);
-  assert.deepEqual(client.requests.find(request => request.method === "thread/resume").params.dynamicTools, tools);
+  const firstResume = client.requests.find(request => request.method === "thread/resume");
+  assert.deepEqual(firstResume.params.dynamicTools, tools);
+  assert.equal(firstResume.params.config, undefined);
   const firstTurn = client.requests.find(request => request.method === "turn/start");
   assert.deepEqual(firstTurn.params.input, [{ type: "text", text: "first turn", text_elements: [] }]);
   assert.equal(firstTurn.params.summary, "auto");
@@ -86,6 +88,36 @@ test("Codex forks branch through App Server thread/fork at the requested complet
     threadSource: "relay.codex",
   });
   assert.equal(client.requests.filter(request => request.method === "thread/start").length, 1);
+  await runtime.close();
+});
+
+test("explicit Hook trust bypass reaches every Thread lifecycle request", async () => {
+  const client = new FakeCodexClient({
+    bypassHookTrust: true,
+  });
+  const runtime = new CodexSessionRuntime({ client, cwd: "/workspace/relay" });
+  await runtime.initialize();
+  const tools = [{ type: "function", name: "relay_wait", description: "wait", inputSchema: {} }];
+  const parent = await runtime.createSession({ dynamicTools: tools });
+  await runtime.sendMessage(parent.id, { text: "parent turn" });
+  await tick();
+  await runtime.forkSession(parent.id, { lastTurnId: "turn-1" });
+  await runtime.resumeSession(parent.id, { dynamicTools: tools });
+
+  const start = client.requests.find(request => request.method === "thread/start");
+  const fork = client.requests.find(request => request.method === "thread/fork");
+  const resume = client.requests.find(request => request.method === "thread/resume");
+  assert.deepEqual(start.params.config, {
+    "features.realtime_conversation": false,
+    bypass_hook_trust: true,
+  });
+  assert.deepEqual(fork.params.config, {
+    "features.realtime_conversation": false,
+    bypass_hook_trust: true,
+  });
+  assert.deepEqual(resume.params.config, { bypass_hook_trust: true });
+  assert.deepEqual(start.params.dynamicTools, tools);
+  assert.deepEqual(resume.params.dynamicTools, tools);
   await runtime.close();
 });
 
@@ -535,8 +567,9 @@ test("ephemeral auxiliary threads carry isolated instructions and are released",
 });
 
 class FakeCodexClient extends EventEmitter {
-  constructor() {
+  constructor({ bypassHookTrust = false } = {}) {
     super();
+    this.bypassHookTrust = bypassHookTrust;
     this.connected = true;
     this.requests = [];
     this.responses = [];
