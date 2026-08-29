@@ -12,6 +12,14 @@ export interface WorkspaceImportSummary {
   ready: number
 }
 
+export interface WorkspaceImportCandidate {
+  id: string
+  title: string
+  cwd: string
+  updatedAt: number | string | null
+  status: 'ready' | 'recoverable'
+}
+
 export interface WorkspaceImportResult {
   found: number
   imported: number
@@ -39,11 +47,15 @@ export function scanCodexWorkspace(
 ): Promise<{
   workspace: WorkspaceImportWorkspace
   summary: WorkspaceImportSummary
+  candidates: readonly WorkspaceImportCandidate[]
 }>
 
 export function importCodexWorkspace(
   cwd: string,
-  onProgress?: ((progress: WorkspaceImportProgress) => void) | null,
+  options?: {
+    threadIds?: readonly string[]
+    onProgress?: ((progress: WorkspaceImportProgress) => void) | null
+  },
   fetchImpl?: typeof fetch,
 ): Promise<WorkspaceImportResult>
 

@@ -27,7 +27,7 @@ test("Codex import registers one exact DSH Web route", () => {
   assert.equal(typeof registration.handler, "function");
 });
 
-test("scan returns only the selected registered Workspace and aggregate counts", async () => {
+test("scan returns eligible Thread identities for only the selected registered Workspace", async () => {
   const service = importer();
   const handler = createCodexImportHandler({ importer: service, workspaceRegistry: registry() });
   const response = responseRecorder();
@@ -38,6 +38,22 @@ test("scan returns only the selected registered Workspace and aggregate counts",
   assert.deepEqual(response.json, {
     workspace: { title: "Relay", path: "/workspace/relay" },
     summary: { found: 3, existing: 1, recoverable: 1, ready: 2 },
+    candidates: [
+      {
+        id: "thread-ready",
+        title: "Ready title",
+        cwd: "/workspace/relay",
+        updatedAt: 30,
+        status: "ready",
+      },
+      {
+        id: "thread-recoverable",
+        title: "Recoverable preview",
+        cwd: "/workspace/relay",
+        updatedAt: 20,
+        status: "recoverable",
+      },
+    ],
   });
   assert.deepEqual(service.scans, ["/workspace/relay"]);
 });
@@ -47,7 +63,9 @@ test("import streams monotonic progress and a final aggregate result", async () 
   const handler = createCodexImportHandler({ importer: service, workspaceRegistry: registry() });
   const response = responseRecorder();
 
-  await handler(request({ body: { action: "import", cwd: "/workspace/relay" } }), response);
+  await handler(request({
+    body: { action: "import", cwd: "/workspace/relay", threadIds: ["thread-ready"] },
+  }), response);
 
   assert.equal(response.status, 200);
   assert.equal(response.headers["content-type"], "application/x-ndjson; charset=utf-8");
@@ -56,6 +74,18 @@ test("import streams monotonic progress and a final aggregate result", async () 
     { type: "progress", completed: 2, total: 2, found: 3, imported: 1, existing: 1, failed: 0 },
     { type: "complete", result: { found: 3, imported: 1, existing: 1, failed: 0 } },
   ]);
+  assert.deepEqual(service.imports, [{ cwd: "/workspace/relay", threadIds: ["thread-ready"] }]);
+});
+
+test("import keeps the omitted threadIds contract for compatible clients", async () => {
+  const service = importer();
+  const handler = createCodexImportHandler({ importer: service, workspaceRegistry: registry() });
+  const response = responseRecorder();
+
+  await handler(request({ body: { action: "import", cwd: "/workspace/relay" } }), response);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(service.imports, [{ cwd: "/workspace/relay", threadIds: undefined }]);
 });
 
 test("route rejects unsafe methods, bodies, Workspaces, and remote callers", async () => {
@@ -64,7 +94,7 @@ test("route rejects unsafe methods, bodies, Workspaces, and remote callers", asy
     importer: service,
     workspaceRegistry: registry(),
     token: "import-secret",
-    maxBodyBytes: 64,
+    maxBodyBytes: 128,
   });
 
   const wrongMethod = responseRecorder();
@@ -107,9 +137,14 @@ test("route rejects unsafe methods, bodies, Workspaces, and remote callers", asy
 
   const oversized = responseRecorder();
   await handler(request({
-    body: { action: "scan", cwd: "/workspace/relay", padding: "x".repeat(100) },
+    body: { action: "scan", cwd: "/workspace/relay", padding: "x".repeat(200) },
   }), oversized);
   assert.equal(oversized.status, 413);
+  const duplicateIds = responseRecorder();
+  await handler(request({
+    body: { action: "import", cwd: "/workspace/relay", threadIds: ["same", "same"] },
+  }), duplicateIds);
+  assert.equal(duplicateIds.status, 400);
   assert.equal(service.scans.length, 1);
   assert.equal(service.imports.length, 0);
 });
@@ -120,10 +155,26 @@ function importer() {
     imports: [],
     async scanWorkspace(cwd) {
       this.scans.push(cwd);
-      return { summary: { found: 3, existing: 1, recoverable: 1, ready: 2 } };
+      return {
+        summary: { found: 3, existing: 1, recoverable: 1, ready: 2 },
+        entries: [
+          {
+            thread: { id: "thread-ready", name: "Ready title", preview: "ignored", cwd, updatedAt: 30 },
+            status: "ready",
+          },
+          {
+            thread: { id: "thread-recoverable", name: null, preview: "Recoverable\npreview", cwd, updatedAt: 20 },
+            status: "recoverable",
+          },
+          {
+            thread: { id: "thread-existing", name: "Bound", preview: "bound", cwd, updatedAt: 10 },
+            status: "existing",
+          },
+        ],
+      };
     },
-    async importWorkspace(cwd, { onProgress }) {
-      this.imports.push(cwd);
+    async importWorkspace(cwd, { threadIds, onProgress }) {
+      this.imports.push({ cwd, threadIds });
       onProgress({ completed: 1, total: 2, found: 3, imported: 1, existing: 0, failed: 0 });
       onProgress({ completed: 2, total: 2, found: 3, imported: 1, existing: 1, failed: 0 });
       return { found: 3, imported: 1, existing: 1, failed: 0 };

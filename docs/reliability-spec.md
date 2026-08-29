@@ -77,6 +77,29 @@ Only the newest preset generation may select a model. Model discovery may be
 retried with bounded delays while the App Server becomes ready. A non-blank
 Session is never rewritten by this synchronization.
 
+## Workspace Thread discovery and selective import
+
+The import scan lists only Codex Threads whose canonical `cwd` belongs to the
+exact current DSH Workspace and whose binding state is `ready` or `recoverable`.
+Each candidate exposes its complete Codex Thread id, deterministic title, canonical
+path, App Server `updatedAt`, and binding status. Candidates are unique and ordered
+by source activity time, with Thread id as the deterministic tie-breaker. Already
+bound Threads remain part of aggregate counts but are never selectable; Threads
+from another Workspace are neither counted nor disclosed.
+
+The UI defaults to all eligible candidates and supports selecting one, several,
+all, or none. An empty selection cannot be submitted. The import request carries
+the exact selected Thread ids. Before creating or changing any DSH Session, the
+Host rescans the Workspace and validates the entire selection for non-empty unique
+ids, current Workspace membership, and unbound or recoverable state. Any unknown,
+duplicate, cross-Workspace, or newly-bound id rejects the whole request without a
+partial mutation. A request that omits `threadIds` retains the previous import-all
+Host API behavior for compatible clients; an explicit empty array is invalid.
+
+Recoverable imports remain idempotent. After a successful selective import, DSH
+refreshes Sessions before Workspace membership so the imported Session appears
+with the original Codex title and source activity ordering.
+
 ## Thread binding and forks
 
 One DSH Session binds at most one Codex Thread, and one Codex Thread binds at

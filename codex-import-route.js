@@ -47,9 +47,12 @@ export function createCodexImportHandler({
         writeJson(response, 200, {
           workspace: { title: workspace.title, path: workspace.path },
           summary: inventory.summary,
+          candidates: publicCandidates(inventory.entries),
         });
         return;
       }
+
+      const threadIds = optionalThreadIds(body?.threadIds);
 
       response.writeHead(200, {
         "content-type": "application/x-ndjson; charset=utf-8",
@@ -58,6 +61,7 @@ export function createCodexImportHandler({
       });
       try {
         const result = await importer.importWorkspace(workspace.path, {
+          threadIds,
           onProgress: progress => writeLine(response, { type: "progress", ...progress }),
         });
         writeLine(response, { type: "complete", result });
@@ -121,6 +125,37 @@ function isLoopback(address) {
 export function requiredString(value, name) {
   if (typeof value !== "string" || !value.trim()) throw new ImportRouteError(400, `${name} is required`);
   return value.trim();
+}
+
+export function optionalThreadIds(value) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0 || value.length > 100) {
+    throw new ImportRouteError(400, "threadIds must contain between 1 and 100 IDs");
+  }
+  const ids = value.map((threadId) => requiredString(threadId, "threadId"));
+  if (new Set(ids).size !== ids.length) throw new ImportRouteError(400, "threadIds must be unique");
+  return ids;
+}
+
+function publicCandidates(entries = []) {
+  return entries
+    .filter(entry => entry.status === "ready" || entry.status === "recoverable")
+    .map(({ thread, status }) => ({
+      id: thread.id,
+      title: publicThreadTitle(thread),
+      cwd: thread.cwd,
+      updatedAt: thread.updatedAt ?? thread.createdAt ?? null,
+      status,
+    }));
+}
+
+function publicThreadTitle(thread) {
+  for (const value of [thread.name, thread.preview]) {
+    if (typeof value !== "string") continue;
+    const normalized = value.replace(/\s+/g, " ").trim();
+    if (normalized) return normalized.slice(0, 160);
+  }
+  return String(thread.id);
 }
 
 function writeLine(response, value) {

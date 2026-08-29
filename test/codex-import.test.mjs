@@ -97,6 +97,61 @@ test("Workspace import summarizes inventory and preserves successes across a par
   assert.equal(runtime.created, 0);
 });
 
+test("selected Workspace import validates every Thread before mutating and preserves inventory order", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "relay-codex-import-selected-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const runtime = new ImportRuntime([
+    thread("codex-older", 10),
+    thread("codex-newer", 30),
+    thread("codex-middle", 20),
+  ]);
+  const target = new ImportTarget();
+  const service = importer(runtime, target, join(directory, "links.json"));
+  service.adapter.bindImportedThread("existing-session", "codex-middle", config());
+  service.adapter.markImportState("existing-session", "committed");
+
+  const scan = await service.scanWorkspace("/workspace/relay");
+  assert.deepEqual(scan.entries.map(entry => entry.thread.id), [
+    "codex-newer", "codex-middle", "codex-older",
+  ]);
+
+  await assert.rejects(
+    service.importWorkspace("/workspace/relay", { threadIds: ["codex-newer", "codex-unknown"] }),
+    /is not available in this Workspace/,
+  );
+  await assert.rejects(
+    service.importWorkspace("/workspace/relay", { threadIds: ["codex-middle"] }),
+    /already bound to DSH/,
+  );
+  await assert.rejects(
+    service.importWorkspace("/workspace/relay", { threadIds: ["codex-newer", "codex-newer"] }),
+    /selected more than once/,
+  );
+  await assert.rejects(
+    service.importWorkspace("/workspace/relay", { threadIds: [42] }),
+    /must be non-empty strings/,
+  );
+  assert.equal(target.prepareCalls, 0);
+
+  const progress = [];
+  const result = await service.importWorkspace("/workspace/relay", {
+    threadIds: ["codex-older"],
+    onProgress: update => progress.push(update),
+  });
+  assert.deepEqual(result, {
+    found: 1,
+    imported: 1,
+    existing: 0,
+    failed: 0,
+    failures: [],
+  });
+  assert.deepEqual(progress.map(update => ({ completed: update.completed, total: update.total })), [
+    { completed: 1, total: 1 },
+  ]);
+  assert.equal(service.adapter.bindingForThread("codex-newer"), null);
+  assert.equal(service.adapter.bindingForThread("codex-older").importState, "committed");
+});
+
 test("concurrent Workspace imports coalesce each Thread transaction", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "relay-codex-import-concurrent-"));
   context.after(() => rm(directory, { recursive: true, force: true }));

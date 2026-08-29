@@ -71,7 +71,7 @@ function applyWorkspaceImport(ctx: ClientContext): void {
       workspaceImportSessions: ctx.sessions.list,
     },
     scanWorkspace: cwd => scanCodexWorkspace(cwd),
-    importWorkspace: (cwd, onProgress) => importCodexWorkspace(cwd, onProgress),
+    importWorkspace: (cwd, threadIds, onProgress) => importCodexWorkspace(cwd, { threadIds, onProgress }),
     refreshWorkspaceState: () => refreshImportedWorkspace(
       ctx.sessions as typeof ctx.sessions & { refresh(): Promise<void> },
       ctx.workspaces as typeof ctx.workspaces & { refresh(): Promise<void> },

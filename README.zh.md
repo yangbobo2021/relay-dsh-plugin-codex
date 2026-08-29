@@ -175,12 +175,15 @@ npx @deepseek-ai/dsh@0.1.1-rc.2 web
 
 1. 在 DSH 中打开目标 Workspace 或其中任一 Session。
 2. 点击 Workspace 列表下方、Settings 上方的 **导入 Codex 会话**。
-3. 查看汇总扫描结果，然后点击 **全部导入**。
-4. 确认导入的 Session 已直接显示 Codex 标题并按源活动时间排列，然后打开
+3. 查看每个可导入 Codex Thread 的完整 ID、标题、源路径、最后活动时间以及
+   “可导入”或“待恢复”状态，并勾选一个、多个或全部 Thread。
+4. 点击 **导入所选会话**。
+5. 确认导入的 Session 已直接显示 Codex 标题并按源活动时间排列，然后打开
    任一 Session 继续对话。
 
-首版按整个 Workspace 导入，不提供逐 Thread 勾选。标题和最后活动时间在打开
-Session 前就必须可用；批量导入时间不会覆盖 Codex inventory 的
+列表只显示精确属于当前 Workspace 的可导入 Thread；已绑定 Thread 和其他
+Workspace 的 Thread 不可选择。标题和最后活动时间在打开 Session 前就必须可用；
+批量导入时间不会覆盖 Codex inventory 的
 `thread/list.updatedAt` 顺序。Codex App Server 继续负责
 模型上下文、工具状态和压缩；DSH 只保存原生用户/助手展示历史以及一对一绑定，
 不会复制 Codex 私有运行记录。每次打开已导入的 Session 时，插件会读取一次对应

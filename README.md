@@ -184,13 +184,16 @@ activates the bundle and registers the managed **Codex** mode automatically.
 
 1. Open the target Workspace or one of its Sessions in DSH.
 2. Select **Import Codex Sessions** below the Workspace list and above Settings.
-3. Review the aggregate scan counts, then select **Import all**.
-4. Confirm that imported rows already show their Codex titles and source activity
+3. Review each eligible Codex Thread's full ID, title, source path, last activity,
+   and ready or recoverable status. Select one, several, or all Threads.
+4. Select **Import selected**.
+5. Confirm that imported rows already show their Codex titles and source activity
    order, then open any Session and continue chatting.
 
-This release imports the whole Workspace and does not offer per-Thread selection.
-Titles and recency are available before a Session is opened; batch execution time
-does not replace the Codex inventory `thread/list.updatedAt` order.
+Only eligible Threads from the exact current Workspace are shown. Already-bound
+Threads and Threads from another Workspace cannot be selected. Titles and recency
+are available before a Session is opened; batch execution time does not replace
+the Codex inventory `thread/list.updatedAt` order.
 Codex App Server remains authoritative for model context, tool state, and
 compaction. DSH stores native user/assistant presentation history and the durable
 one-to-one binding; it does not copy private Codex runtime records. Each time an

@@ -67,27 +67,39 @@ test("NDJSON parsing survives arbitrary chunk boundaries", async () => {
   ]);
 });
 
-test("import forwards progress and requires one complete frame", async () => {
+test("import sends selected Thread IDs, forwards progress, and requires one complete frame", async () => {
   const updates = [];
-  const complete = await importCodexWorkspace("/workspace/relay", update => updates.push(update), async () => new Response(
-    stream([
-      '{"type":"progress","completed":1,"total":1}\n',
-      '{"type":"complete","result":{"found":1,"imported":1,"existing":0,"failed":0,"failures":[]}}\n',
-    ]),
-    { status: 200, headers: { "content-type": "application/x-ndjson" } },
-  ));
+  let importBody = null;
+  const complete = await importCodexWorkspace("/workspace/relay", {
+    threadIds: ["thread-2"],
+    onProgress: update => updates.push(update),
+  }, async (_path, init) => {
+    importBody = JSON.parse(init.body);
+    return new Response(
+      stream([
+        '{"type":"progress","completed":1,"total":1}\n',
+        '{"type":"complete","result":{"found":1,"imported":1,"existing":0,"failed":0,"failures":[]}}\n',
+      ]),
+      { status: 200, headers: { "content-type": "application/x-ndjson" } },
+    );
+  });
   assert.equal(updates.length, 1);
   assert.equal(complete.imported, 1);
+  assert.deepEqual(importBody, {
+    action: "import",
+    cwd: "/workspace/relay",
+    threadIds: ["thread-2"],
+  });
 
   await assert.rejects(
-    importCodexWorkspace("/workspace/relay", null, async () => new Response(
+    importCodexWorkspace("/workspace/relay", {}, async () => new Response(
       stream(['{"type":"progress","completed":1}\n']),
       { status: 200 },
     )),
     /ended before completion/,
   );
   await assert.rejects(
-    importCodexWorkspace("/workspace/relay", null, async () => new Response(
+    importCodexWorkspace("/workspace/relay", {}, async () => new Response(
       stream(['{"type":"error","message":"App Server unavailable"}\n']),
       { status: 200 },
     )),

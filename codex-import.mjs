@@ -19,7 +19,8 @@ export class CodexWorkspaceImporter {
   }
 
   async scanWorkspace(cwd) {
-    const threads = await this.runtime.listWorkspaceThreads({ cwd });
+    const threads = (await this.runtime.listWorkspaceThreads({ cwd }))
+      .toSorted(compareInventoryThreads);
     const entries = threads.map((thread) => {
       const binding = this.adapter.bindingForThread(thread.id);
       if (!binding) return { thread, binding: null, status: "ready" };
@@ -42,10 +43,11 @@ export class CodexWorkspaceImporter {
     };
   }
 
-  async importWorkspace(cwd, { onProgress } = {}) {
+  async importWorkspace(cwd, { threadIds, onProgress } = {}) {
     const inventory = await this.scanWorkspace(cwd);
+    const entries = selectedImportEntries(inventory.entries, threadIds);
     const result = {
-      found: inventory.summary.found,
+      found: threadIds === undefined ? inventory.summary.found : entries.length,
       imported: 0,
       existing: 0,
       failed: 0,
@@ -53,7 +55,7 @@ export class CodexWorkspaceImporter {
     };
     let completed = 0;
 
-    for (const entry of inventory.entries) {
+    for (const entry of entries) {
       if (entry.status === "existing") {
         result.existing += 1;
       } else {
@@ -69,7 +71,7 @@ export class CodexWorkspaceImporter {
         }
       }
       completed += 1;
-      onProgress?.({ completed, total: inventory.entries.length, ...result });
+      onProgress?.({ completed, total: entries.length, ...result });
     }
 
     return result;
@@ -126,6 +128,39 @@ export function importedSessionId(threadId) {
 
 function before(current, target) {
   return IMPORT_STATE_ORDER.indexOf(current) < IMPORT_STATE_ORDER.indexOf(target);
+}
+
+function compareInventoryThreads(left, right) {
+  const updated = timestampValue(right.updatedAt) - timestampValue(left.updatedAt);
+  return updated === 0 ? String(left.id).localeCompare(String(right.id)) : updated;
+}
+
+function timestampValue(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const parsed = Date.parse(String(value ?? ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function selectedImportEntries(entries, threadIds) {
+  if (threadIds === undefined) return entries;
+  if (!Array.isArray(threadIds) || threadIds.length === 0) {
+    throw new Error("At least one Codex Thread must be selected");
+  }
+  const selected = new Set();
+  for (const rawId of threadIds) {
+    if (typeof rawId !== "string") throw new Error("Selected Codex Thread IDs must be non-empty strings");
+    const threadId = rawId.trim();
+    if (!threadId) throw new Error("Selected Codex Thread IDs must be non-empty strings");
+    if (selected.has(threadId)) throw new Error(`Codex Thread ${shortThreadId(threadId)} was selected more than once`);
+    selected.add(threadId);
+  }
+  const inventory = new Map(entries.map(entry => [entry.thread.id, entry]));
+  for (const threadId of selected) {
+    const entry = inventory.get(threadId);
+    if (!entry) throw new Error(`Codex Thread ${shortThreadId(threadId)} is not available in this Workspace`);
+    if (entry.status === "existing") throw new Error(`Codex Thread ${shortThreadId(threadId)} is already bound to DSH`);
+  }
+  return entries.filter(entry => selected.has(entry.thread.id));
 }
 
 function shortThreadId(threadId) {

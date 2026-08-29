@@ -17,8 +17,8 @@ export async function scanCodexWorkspace(cwd, fetchImpl = fetch) {
   return body;
 }
 
-export async function importCodexWorkspace(cwd, onProgress, fetchImpl = fetch) {
-  const response = await fetchImpl(CODEX_IMPORT_PATH, requestInit("import", cwd));
+export async function importCodexWorkspace(cwd, { threadIds, onProgress } = {}, fetchImpl = fetch) {
+  const response = await fetchImpl(CODEX_IMPORT_PATH, requestInit("import", cwd, threadIds));
   if (!response.ok) {
     const body = await readJsonResponse(response);
     throw new Error(body?.message ?? `Codex import failed with HTTP ${response.status}`);
@@ -63,11 +63,15 @@ export async function* ndjsonFrames(body) {
   }
 }
 
-function requestInit(action, cwd) {
+function requestInit(action, cwd, threadIds) {
   return {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ action, cwd }),
+    body: JSON.stringify({
+      action,
+      cwd,
+      ...(threadIds === undefined ? {} : { threadIds }),
+    }),
   };
 }
 
