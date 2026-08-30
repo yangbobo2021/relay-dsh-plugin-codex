@@ -1,4 +1,4 @@
-export type WorkspaceImportUiAction = 'cancel' | 'close' | 'import-selected' | 'importing' | 'retry'
+export type WorkspaceImportUiAction = 'cancel' | 'close' | 'import-selected' | 'importing' | 'retry' | 'scan'
 
 export interface WorkspaceImportUiPolicy {
   readonly canClose: boolean
@@ -11,6 +11,7 @@ export function workspaceImportUiPolicy(
   phase: string,
   selected?: number,
   failed?: number,
+  hasWorkspace?: boolean,
 ): WorkspaceImportUiPolicy
 
 export function workspaceImportUpdatedAtDate(value: number | string | null | undefined): Date | null

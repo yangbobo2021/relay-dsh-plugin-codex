@@ -1,4 +1,4 @@
-export function workspaceImportUiPolicy(phase, selected = 0, failed = 0) {
+export function workspaceImportUiPolicy(phase, selected = 0, failed = 0, hasWorkspace = true) {
   if (phase === "importing") {
     return Object.freeze({ canClose: false, primary: "importing", primaryDisabled: true });
   }
@@ -8,6 +8,14 @@ export function workspaceImportUiPolicy(phase, selected = 0, failed = 0) {
       secondary: "cancel",
       primary: "import-selected",
       primaryDisabled: selected === 0,
+    });
+  }
+  if (phase === "select-workspace") {
+    return Object.freeze({
+      canClose: true,
+      secondary: "cancel",
+      primary: "scan",
+      primaryDisabled: !hasWorkspace,
     });
   }
   if (phase === "error") {

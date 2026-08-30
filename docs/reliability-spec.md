@@ -79,8 +79,16 @@ Session is never rewritten by this synchronization.
 
 ## Workspace Thread discovery and selective import
 
+The sidebar footer exposes a Codex-specific icon action: 34 by 34 pixels while
+expanded and 28 by 28 pixels in the 56-pixel collapsed rail, so Codex and Claude
+fit side by side. Its localized accessible name is also its Tooltip; no inline
+label may consume the shared horizontal footer row. Opening
+the action presents a visible Workspace selector. The current Session owner,
+then the recent Workspace, is only an initial choice. The user may change it,
+and the plugin must not scan until the user invokes **Scan sessions**.
+
 The import scan lists only Codex Threads whose canonical `cwd` belongs to the
-exact current DSH Workspace and whose binding state is `ready` or `recoverable`.
+explicitly selected DSH Workspace and whose binding state is `ready` or `recoverable`.
 Each candidate exposes its complete Codex Thread id, deterministic title, canonical
 path, App Server `updatedAt`, and binding status. Candidates are unique and ordered
 by source activity time, with Thread id as the deterministic tie-breaker. Already

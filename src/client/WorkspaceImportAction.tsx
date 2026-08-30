@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactNode } from 'react'
 import {
   Button,
-  IconDownloadOutline16,
+  IconCodeOutline16,
   Modal,
   Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -90,7 +90,7 @@ type Props = PropsRuntime<'sidebar.footer.action'>
   & InjectFace<WorkspaceImportInjected>
   & PropsLocale<'relay.codex'>
 
-type Phase = 'idle' | 'no-workspace' | 'scanning' | 'summary' | 'importing' | 'complete' | 'error'
+type Phase = 'idle' | 'no-workspace' | 'select-workspace' | 'scanning' | 'summary' | 'importing' | 'complete' | 'error'
 
 export function WorkspaceImportAction({
   wide,
@@ -147,14 +147,18 @@ export function WorkspaceImportAction({
   }
 
   const begin = (): void => {
-    const selected = availableTarget
+    const selected = availableTarget ?? workspaces.items[0] ?? null
     setTarget(selected)
     setOpen(true)
     if (selected === null) {
       setPhase('no-workspace')
       return
     }
-    scan(selected)
+    setPhase('select-workspace')
+  }
+
+  const scanSelected = (): void => {
+    if (target !== null) scan(target)
   }
 
   const importSelected = (): void => {
@@ -197,15 +201,16 @@ export function WorkspaceImportAction({
 
   return (
     <>
-      <Tooltip label={t('importAction')} delayMs={500} disabled={wide}>
+      <Tooltip label={t('importAction')} side="top" delayMs={500}>
         <button
           type="button"
           className={css.trigger}
           aria-label={t('importAction')}
+          data-provider="codex"
+          data-compact={wide ? undefined : 'true'}
           onClick={begin}
         >
-          <IconDownloadOutline16 size={wide ? 16 : 18} />
-          {wide && <span>{t('importAction')}</span>}
+          <IconCodeOutline16 size={wide ? 18 : 16} />
         </button>
       </Tooltip>
       <Modal
@@ -220,13 +225,34 @@ export function WorkspaceImportAction({
           selectedCount: selectedIds.size,
           result,
           close,
+          scanSelected,
           retry,
           importSelected,
           t,
         })}
       >
         <div className={css.body} aria-live="polite">
-          {target !== null && (
+          {phase === 'select-workspace' && target !== null && (
+            <div className={css.workspaceChoice}>
+              <label htmlFor="codex-import-workspace">{t('importWorkspaceLabel')}</label>
+              <select
+                id="codex-import-workspace"
+                value={target.workspaceId}
+                aria-describedby="codex-import-workspace-help"
+                onChange={event => {
+                  const selected = workspaces.items.find(workspace => workspace.workspaceId === event.currentTarget.value)
+                  if (selected !== undefined) setTarget(selected)
+                }}
+              >
+                {workspaces.items.map(workspace => (
+                  <option key={workspace.workspaceId} value={workspace.workspaceId}>{workspace.title}</option>
+                ))}
+              </select>
+              <span id="codex-import-workspace-help" className={css.message}>{t('importChooseWorkspace')}</span>
+              <span className={css.workspacePath} title={target.path}>{target.path}</span>
+            </div>
+          )}
+          {target !== null && phase !== 'select-workspace' && (
             <div className={css.workspace}>
               <strong>{target.title}</strong>
               <span title={target.path}>{target.path}</span>
@@ -372,23 +398,25 @@ function Metric({
 }
 
 function modalFooter({
-  phase, selectedCount, result, close, retry, importSelected, t,
+  phase, selectedCount, result, close, scanSelected, retry, importSelected, t,
 }: {
   phase: Phase
   selectedCount: number
   result: ImportResult | null
   close: () => void
+  scanSelected: () => void
   retry: () => void
   importSelected: () => void
   t: Props['t']
 }): ReactNode {
-  const policy = workspaceImportUiPolicy(phase, selectedCount, result?.failed)
+  const policy = workspaceImportUiPolicy(phase, selectedCount, result?.failed, phase !== 'no-workspace')
   const actions: Record<WorkspaceImportUiAction, (() => void) | undefined> = {
     cancel: close,
     close,
     'import-selected': importSelected,
     importing: undefined,
     retry,
+    scan: scanSelected,
   }
   const labels: Record<WorkspaceImportUiAction, string> = {
     cancel: t('cancel'),
@@ -396,6 +424,7 @@ function modalFooter({
     'import-selected': t('importSelectedAction'),
     importing: t('importImporting'),
     retry: t('retry'),
+    scan: t('importScanAction'),
   }
   return (
     <>

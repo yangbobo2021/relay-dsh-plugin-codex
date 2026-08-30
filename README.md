@@ -182,15 +182,17 @@ activates the bundle and registers the managed **Codex** mode automatically.
 
 ### 5. Import existing Codex sessions for a Workspace
 
-1. Open the target Workspace or one of its Sessions in DSH.
-2. Select **Import Codex Sessions** below the Workspace list and above Settings.
+1. Select the compact Codex import icon below the Workspace list and above Settings.
+2. In the dialog, confirm or change the visible **Target Workspace**, then select
+   **Scan sessions**. The current Session owner or recent Workspace is only the
+   initial selection; scanning never starts before this confirmation.
 3. Review each eligible Codex Thread's full ID, title, source path, last activity,
    and ready or recoverable status. Select one, several, or all Threads.
 4. Select **Import selected**.
 5. Confirm that imported rows already show their Codex titles and source activity
    order, then open any Session and continue chatting.
 
-Only eligible Threads from the exact current Workspace are shown. Already-bound
+Only eligible Threads from the explicitly selected Workspace are shown. Already-bound
 Threads and Threads from another Workspace cannot be selected. Titles and recency
 are available before a Session is opened; batch execution time does not replace
 the Codex inventory `thread/list.updatedAt` order.

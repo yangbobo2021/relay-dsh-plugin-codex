@@ -7,6 +7,12 @@ import {
 } from "../src/client/workspace-import-ui-policy.mjs";
 
 test("Workspace import UI policy covers every control state", () => {
+  assert.deepEqual(workspaceImportUiPolicy("select-workspace", 0, 0, true), {
+    canClose: true, secondary: "cancel", primary: "scan", primaryDisabled: false,
+  });
+  assert.deepEqual(workspaceImportUiPolicy("select-workspace", 0, 0, false), {
+    canClose: true, secondary: "cancel", primary: "scan", primaryDisabled: true,
+  });
   assert.deepEqual(workspaceImportUiPolicy("no-workspace"), {
     canClose: true, primary: "close", primaryDisabled: false,
   });
