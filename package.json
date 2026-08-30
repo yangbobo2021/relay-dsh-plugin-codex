@@ -2,6 +2,7 @@
   "name": "relay-dsh-plugin-codex",
   "version": "0.1.3",
   "description": "Codex conversation backend for DeepSeek Harness, powered by the Codex App Server with approvals and DSH tool support.",
+  "keywords": ["dsh-plugin", "deepseek-harness", "dsh"],
   "license": "MIT",
   "type": "module",
   "main": "lib/host-plugin.js",
