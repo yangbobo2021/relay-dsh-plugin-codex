@@ -79,9 +79,10 @@ Session is never rewritten by this synchronization.
 
 ## Workspace Thread discovery and selective import
 
-The sidebar footer exposes a Codex-specific icon action: 34 by 34 pixels while
-expanded and 28 by 28 pixels in the 56-pixel collapsed rail, so Codex and Claude
-fit side by side. Its localized accessible name is also its Tooltip; no inline
+The sidebar footer exposes a Codex-specific composite icon action: a shared
+download-to-DSH import glyph with a distinct Codex code badge. The action is 34
+by 34 pixels while expanded and 28 by 28 pixels in the 56-pixel collapsed rail,
+so Codex and Claude fit side by side. Its localized accessible name is also its Tooltip; no inline
 label may consume the shared horizontal footer row. Opening
 the action presents a visible Workspace selector. The current Session owner,
 then the recent Workspace, is only an initial choice. The user may change it,

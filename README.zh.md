@@ -173,7 +173,7 @@ npx @deepseek-ai/dsh@0.1.1-rc.2 web
 
 ### 5. 导入 Workspace 中已有的 Codex 会话
 
-1. 点击 Workspace 列表下方、Settings 上方的紧凑 Codex 导入图标。
+1. 点击 Workspace 列表下方、Settings 上方带 Codex 徽标的紧凑导入箭头图标。
 2. 在弹窗中确认或切换可见的 **目标 Workspace**，然后点击 **扫描会话**。
    当前 Session 所属 Workspace 或最近 Workspace 只作为初始选项；确认前不会开始扫描。
 3. 查看每个可导入 Codex Thread 的完整 ID、标题、源路径、最后活动时间以及

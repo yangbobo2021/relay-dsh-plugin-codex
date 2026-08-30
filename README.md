@@ -182,7 +182,7 @@ activates the bundle and registers the managed **Codex** mode automatically.
 
 ### 5. Import existing Codex sessions for a Workspace
 
-1. Select the compact Codex import icon below the Workspace list and above Settings.
+1. Select the compact import-arrow icon with the Codex badge below the Workspace list and above Settings.
 2. In the dialog, confirm or change the visible **Target Workspace**, then select
    **Scan sessions**. The current Session owner or recent Workspace is only the
    initial selection; scanning never starts before this confirmation.

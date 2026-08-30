@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Button: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button {...props}>{children}</button>,
-  IconCodeOutline16: () => <svg aria-hidden="true" />,
+  IconCodeOutline16: () => <svg data-testid="codex-provider-glyph" aria-hidden="true" />,
+  IconDownloadOutline16: () => <svg data-testid="import-glyph" aria-hidden="true" />,
   Modal: ({ open, title, children, footer }: {
     open: boolean
     title: string
@@ -31,12 +32,16 @@ const workspaces = {
 afterEach(cleanup)
 
 describe('WorkspaceImportAction', () => {
-  it('renders one icon-only Codex action with an accessible Tooltip', () => {
+  it('renders an import glyph with a distinct Codex badge and an accessible Tooltip', () => {
     renderAction()
 
     const trigger = screen.getByRole('button', { name: en.importAction })
     expect(trigger.dataset.provider).toBe('codex')
-    expect(trigger.querySelector('svg')).not.toBeNull()
+    expect(trigger.querySelector('[data-icon-role="import-provider"]')).not.toBeNull()
+    expect(trigger.querySelector('[data-provider-badge="codex"]')).not.toBeNull()
+    expect(screen.getByTestId('import-glyph')).not.toBeNull()
+    expect(screen.getByTestId('codex-provider-glyph')).not.toBeNull()
+    expect(trigger.querySelectorAll('svg')).toHaveLength(2)
     expect(trigger.textContent).toBe('')
 
     fireEvent.focus(trigger)

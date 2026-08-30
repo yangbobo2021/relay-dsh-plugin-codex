@@ -17,4 +17,24 @@ test("Codex footer action remains compact in every sidebar width", async () => {
   assert.match(compact, /min-width:\s*28px;/);
   assert.match(compact, /height:\s*28px;/);
   assert.match(compact, /flex-basis:\s*28px;/);
+
+  const composite = css.match(/\.compositeIcon\s*\{(?<rules>[^}]*)\}/s)?.groups?.rules ?? "";
+  assert.match(composite, /position:\s*relative;/);
+  assert.match(composite, /width:\s*23px;/);
+  assert.match(composite, /height:\s*22px;/);
+
+  const badge = css.match(/\.providerBadge\s*\{(?<rules>[^}]*)\}/s)?.groups?.rules ?? "";
+  assert.match(badge, /position:\s*absolute;/);
+  assert.match(badge, /right:\s*0;/);
+  assert.match(badge, /bottom:\s*0;/);
+  assert.match(badge, /width:\s*13px;/);
+  assert.match(badge, /height:\s*13px;/);
+
+  const compactComposite = css.match(/\.trigger\[data-compact='true'\] \.compositeIcon\s*\{(?<rules>[^}]*)\}/s)?.groups?.rules ?? "";
+  assert.match(compactComposite, /width:\s*21px;/);
+  assert.match(compactComposite, /height:\s*19px;/);
+
+  const compactBadge = css.match(/\.trigger\[data-compact='true'\] \.providerBadge\s*\{(?<rules>[^}]*)\}/s)?.groups?.rules ?? "";
+  assert.match(compactBadge, /width:\s*11px;/);
+  assert.match(compactBadge, /height:\s*11px;/);
 });

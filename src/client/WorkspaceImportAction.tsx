@@ -2,6 +2,7 @@ import { useRef, useState, type ReactNode } from 'react'
 import {
   Button,
   IconCodeOutline16,
+  IconDownloadOutline16,
   Modal,
   Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -210,7 +211,18 @@ export function WorkspaceImportAction({
           data-compact={wide ? undefined : 'true'}
           onClick={begin}
         >
-          <IconCodeOutline16 size={wide ? 18 : 16} />
+          <span className={css.compositeIcon} data-icon-role="import-provider" aria-hidden="true">
+            <IconDownloadOutline16
+              size={wide ? 18 : 16}
+              className={css.importGlyph}
+            />
+            <span className={css.providerBadge} data-provider-badge="codex">
+              <IconCodeOutline16
+                size={wide ? 9 : 8}
+                className={css.providerGlyph}
+              />
+            </span>
+          </span>
         </button>
       </Tooltip>
       <Modal
