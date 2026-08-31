@@ -127,7 +127,17 @@ npx @deepseek-ai/dsh@0.1.1-rc.2 plugin --profile web add relay-dsh-plugin-codex@
 npx @deepseek-ai/dsh@0.1.1-rc.2 plugin --profile web add relay-dsh-plugin-codex@next
 ```
 
-本文更新时，`next` 指向 `0.1.4`。
+本分支准备将 `0.1.6-rc.1` 发布到 `next`，不改变 `latest`。
+安装前请以 npm 注册表中实际发布的 dist-tag 为准。
+
+本次预发布保留原生服务档位和恢复后的配置，修复取消轮次的迟到命令清理，
+拒绝失效绑定上的迟到回复，并保留动态工具错误。具体配置见下文“与桌面 Codex
+对照执行”。默认仍捆绑 `@openai/codex@0.149.0`，不会分发或要求安装 Desktop
+的实验版程序，也不宣称完整复刻 Desktop。
+
+已知限制：原生命令事件偶尔缺少模型实际收到的错误文本；macOS 的 locale
+问题可能影响 `shasum` 等工具。这两项尚未宣称修复。回滚时先停止 DSH，重新
+安装 `relay-dsh-plugin-codex@0.1.5`，恢复曾修改的 profile 配置，再启动 DSH。
 
 #### GitHub 开发版
 
@@ -141,7 +151,7 @@ npx @deepseek-ai/dsh@0.1.1-rc.2 plugin --profile web add github:yangbobo2021/rel
 SHA。例如：
 
 ```bash
-npx @deepseek-ai/dsh@0.1.1-rc.2 plugin --profile web add github:yangbobo2021/relay-dsh-plugin-codex#v0.1.5
+npx @deepseek-ai/dsh@0.1.1-rc.2 plugin --profile web add github:yangbobo2021/relay-dsh-plugin-codex#v0.1.6-rc.1
 ```
 
 官方 DSH CLI 会在需要时初始化 `web` Profile，通过 `pnpm` 安装所选软件包，

@@ -134,7 +134,23 @@ on a global `codex` executable:
 npx @deepseek-ai/dsh@0.1.1-rc.2 plugin --profile web add relay-dsh-plugin-codex@next
 ```
 
-At the time of writing, `next` resolves to `0.1.4`.
+This branch prepares `0.1.6-rc.1` for `next`, without changing `latest`.
+Check the npm registry for the currently published dist-tag before installing.
+
+This prerelease preserves native service-tier and resumed-thread settings, stops
+late commands belonging to canceled turns, rejects stale interaction replies, and
+retains dynamic-tool errors. New conversations receive bounded execution guidance;
+set `codexExecutionGuidance: false` to disable it, or `codexExecutionMode: native`
+to compare without DSH dynamic tools and guidance. The default mode is `enhanced`.
+The host identifies itself as DSH and does not advertise unimplemented Desktop
+attestation or MCP App HTML rendering. Dependency discovery reports existing paths.
+
+The bundled runtime remains `@openai/codex@0.149.0`; Desktop's experimental binary
+is not redistributed or required. This is not complete Desktop parity. Known
+limitations include occasional empty native command-event output even when the
+model received the error, and a macOS locale issue affecting tools such as
+`shasum`. These have not been declared fixed. To roll back, stop DSH, reinstall
+`relay-dsh-plugin-codex@0.1.5`, restore any changed profile configuration, and restart.
 
 #### GitHub development build
 
@@ -148,7 +164,7 @@ npx @deepseek-ai/dsh@0.1.1-rc.2 plugin --profile web add github:yangbobo2021/rel
 full Commit SHA instead. For example:
 
 ```bash
-npx @deepseek-ai/dsh@0.1.1-rc.2 plugin --profile web add github:yangbobo2021/relay-dsh-plugin-codex#v0.1.5
+npx @deepseek-ai/dsh@0.1.1-rc.2 plugin --profile web add github:yangbobo2021/relay-dsh-plugin-codex#v0.1.6-rc.1
 ```
 
 The official DSH CLI initializes the `web` Profile if it does not exist, asks

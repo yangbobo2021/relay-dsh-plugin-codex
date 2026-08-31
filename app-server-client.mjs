@@ -6,7 +6,7 @@ import { codexSpawnError, resolveCodexLaunch } from "./codex-command.mjs";
 const NATIVE_CODEX_CLIENT_INFO = {
   name: "relay_codex",
   title: "DSH Codex",
-  version: "0.1.5",
+  version: "0.1.6-rc.1",
 };
 
 export const RELAY_CODEX_APP_SERVER_ARGS = [
