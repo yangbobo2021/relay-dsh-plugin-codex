@@ -37,6 +37,8 @@ export class CodexSessionRuntime extends EventEmitter {
     this.appliedThreadSettings = new Map();
     this.pendingRequests = new Map();
     this.codeModeCalls = new Map();
+    this.turnBackgroundBaselines = new Map();
+    this.interruptedTurns = new Map();
     this.models = [];
     this.account = null;
     this.selectedSessionId = null;
@@ -53,6 +55,7 @@ export class CodexSessionRuntime extends EventEmitter {
         const error = new Error("Codex App Server exited before DSH disconnected.");
         error.code = "CODEX_APP_SERVER_EXITED";
         this.setConnectionStatus(codexConnectionFailure(error));
+        this.failActiveTurns(error);
       }
       this.emitChange();
     });
@@ -171,7 +174,7 @@ export class CodexSessionRuntime extends EventEmitter {
       cwd,
       model: selectedModel,
       modelProvider: null,
-      serviceTier: null,
+      // Omit serviceTier to inherit native configuration; null resets it to default.
       config: newThreadConfig(this.bypassHookTrust),
       approvalsReviewer: "user",
       approvalPolicy,
@@ -195,7 +198,7 @@ export class CodexSessionRuntime extends EventEmitter {
       cwd,
       ephemeral: Boolean(result.thread.ephemeral ?? ephemeral),
     });
-    this.recordAppliedThreadSettings(session.id, {
+    this.recordNativeSettings(session, result, {
       model: selectedModel,
       effort: selectedEffort,
       multiAgentMode: DEFAULT_MULTI_AGENT_MODE,
@@ -230,7 +233,7 @@ export class CodexSessionRuntime extends EventEmitter {
       cwd,
       model: selectedModel,
       modelProvider: null,
-      serviceTier: null,
+      // Preserve the source thread's service tier when forking.
       config: newThreadConfig(this.bypassHookTrust),
       approvalsReviewer: "user",
       approvalPolicy,
@@ -252,7 +255,7 @@ export class CodexSessionRuntime extends EventEmitter {
       cwd: result.cwd ?? cwd,
       ephemeral: Boolean(result.thread.ephemeral ?? ephemeral),
     });
-    this.recordAppliedThreadSettings(session.id, {
+    this.recordNativeSettings(session, result, {
       model: session.model,
       effort: session.effort,
       multiAgentMode: DEFAULT_MULTI_AGENT_MODE,
@@ -276,7 +279,7 @@ export class CodexSessionRuntime extends EventEmitter {
       ...(defaults.dynamicTools === undefined ? {} : { dynamicTools: defaults.dynamicTools }),
     });
     const session = this.upsertThread(result.thread, defaults);
-    this.recordAppliedThreadSettings(session.id, {
+    this.recordNativeSettings(session, result, {
       model: session.model,
       effort: session.effort,
       multiAgentMode: DEFAULT_MULTI_AGENT_MODE,
@@ -324,6 +327,11 @@ export class CodexSessionRuntime extends EventEmitter {
     });
     this.emitChange();
 
+    // Native code-mode commands can start before an item/started notification.
+    // Snapshot existing thread processes so cancellation can still identify new
+    // work without terminating a server intentionally left by an earlier turn.
+    const existingProcesses = new Set((await this.listBackgroundTerminals(threadId))
+      .map(terminal => String(terminal.processId)));
     const result = await this.client.request("turn/start", compactObject({
       threadId,
       clientUserMessageId: randomUUID(),
@@ -335,7 +343,7 @@ export class CodexSessionRuntime extends EventEmitter {
       permissions: usePermissionProfile ? permissionProfile(nextSandbox) : null,
       runtimeWorkspaceRoots: usePermissionProfile ? runtimeWorkspaceRoots(nextSandbox, workspaceRoots) : null,
       model: null,
-      serviceTier: null,
+      // Preserve the thread's service tier across turns (null explicitly clears it).
       effort: null,
       multiAgentMode: DEFAULT_MULTI_AGENT_MODE,
       summary: reasoningSummary === "none" ? "none" : "auto",
@@ -352,6 +360,7 @@ export class CodexSessionRuntime extends EventEmitter {
       },
       attachments,
     }), { timeoutMs: 60_000 });
+    this.turnBackgroundBaselines.set(threadId, { turnId: result.turn.id, existingProcesses });
     this.ensureTurn(session, result.turn);
     this.emitChange();
     return structuredClone(result.turn);
@@ -359,18 +368,28 @@ export class CodexSessionRuntime extends EventEmitter {
 
   async interruptTurn(threadId, turnId) {
     const session = this.requireSession(threadId);
+    // Native code mode can publish item/started AFTER turn/completed. Keep a
+    // turn-scoped cancellation marker so late launches remain owned and stopped.
+    const interruptionKey = JSON.stringify([threadId, turnId]);
+    if (!this.interruptedTurns.has(interruptionKey)) {
+      this.interruptedTurns.set(interruptionKey, { stoppedProcesses: new Set() });
+    }
     const turn = session.turns.find(candidate => candidate.id === turnId);
     const activeCommands = (turn?.items ?? []).filter(item => (
       item?.type === "commandExecution" && item.status === "inProgress"
     ));
     const itemIds = new Set(activeCommands.map(item => item.id).filter(Boolean));
     const processIds = new Set(activeCommands.map(item => item.processId).filter(Boolean).map(String));
+    const baseline = this.turnBackgroundBaselines.get(threadId);
+    const ownsNewProcesses = baseline?.turnId === turnId;
+    const ownsTerminal = terminal => itemIds.has(terminal.itemId)
+      || (ownsNewProcesses && !baseline.existingProcesses.has(String(terminal.processId)));
     const failures = [];
 
-    if (itemIds.size > 0) {
+    if (itemIds.size > 0 || ownsNewProcesses) {
       try {
         for (const terminal of await this.listBackgroundTerminals(threadId)) {
-          if (itemIds.has(terminal.itemId) && terminal.processId) {
+          if (ownsTerminal(terminal) && terminal.processId) {
             processIds.add(String(terminal.processId));
           }
         }
@@ -386,18 +405,18 @@ export class CodexSessionRuntime extends EventEmitter {
       failures.push(error);
     }
 
-    if (itemIds.size > 0) {
+    if (itemIds.size > 0 || ownsNewProcesses) {
       try {
         const afterInterrupt = await this.listBackgroundTerminals(threadId);
         const remainingProcessIds = new Set();
         for (const terminal of afterInterrupt) {
-          if (itemIds.has(terminal.itemId) && terminal.processId) {
+          if (ownsTerminal(terminal) && terminal.processId) {
             remainingProcessIds.add(String(terminal.processId));
           }
         }
         await this.terminateBackgroundProcesses(threadId, remainingProcessIds);
         const remaining = (await this.listBackgroundTerminals(threadId))
-          .filter(terminal => itemIds.has(terminal.itemId));
+          .filter(ownsTerminal);
         if (remaining.length > 0) {
           throw new Error(`App Server retained ${remaining.length} interrupted background terminal(s)`);
         }
@@ -440,6 +459,25 @@ export class CodexSessionRuntime extends EventEmitter {
         processId,
       });
     }
+  }
+
+  stopLateInterruptedCommand(threadId, turnId, item) {
+    const marker = this.interruptedTurns.get(JSON.stringify([threadId, turnId]));
+    if (!marker || item?.type !== "commandExecution" || item.status !== "inProgress" || item.processId == null) return;
+    const processId = String(item.processId);
+    const commandKey = JSON.stringify([item.id, processId]);
+    if (marker.stoppedProcesses.has(commandKey)) return;
+    marker.stoppedProcesses.add(commandKey);
+    void this.terminateBackgroundProcesses(threadId, [processId]).catch(error => {
+      marker.stoppedProcesses.delete(commandKey);
+      const failure = turnInterruptionFailure(threadId, turnId, [error]);
+      const turn = this.sessions.get(threadId)?.turns.find(candidate => candidate.id === turnId);
+      if (turn) turn.error = { message: failure.message, code: failure.code };
+      this.addDiagnostic(`${failure.code}: late command ${processId}: ${error.message}`);
+      this.emit("activity", { method: "error", params: { threadId, turnId,
+        error: { message: failure.message, code: failure.code } } });
+      this.emitChange();
+    });
   }
 
   async syncThreadSettings(threadId, settings) {
@@ -554,6 +592,7 @@ export class CodexSessionRuntime extends EventEmitter {
     if (this.closed) return;
     this.closed = true;
     await this.client.close();
+    this.interruptedTurns.clear();
   }
 
   handleNotification(message) {
@@ -573,6 +612,8 @@ export class CodexSessionRuntime extends EventEmitter {
       session.updatedAt = Date.now();
     } else if (method === "thread/name/updated" && session) {
       session.title = params.name;
+    } else if (method === "thread/settings/updated" && session && params.threadSettings) {
+      this.recordNativeSettings(session, params.threadSettings, this.appliedThreadSettings.get(threadId));
     } else if (method === "turn/started" && session) {
       this.ensureTurn(session, params.turn);
       session.updatedAt = Date.now();
@@ -580,15 +621,17 @@ export class CodexSessionRuntime extends EventEmitter {
       this.replaceTurn(session, params.turn);
       session.updatedAt = Date.now();
     } else if (method === "turn/diff/updated" && session) {
-      const turn = this.ensureTurn(session, { id: params.turnId, items: [], status: "inProgress" });
+      const turn = this.ensureTurn(session, { id: params.turnId, items: [] });
       turn.diff = params.diff;
     } else if (method === "turn/plan/updated" && session) {
-      const turn = this.ensureTurn(session, { id: params.turnId, items: [], status: "inProgress" });
+      const turn = this.ensureTurn(session, { id: params.turnId, items: [] });
       turn.plan = structuredClone(params.plan);
       turn.planExplanation = params.explanation ?? null;
     } else if ((method === "item/started" || method === "item/completed") && session) {
-      const turn = this.ensureTurn(session, { id: params.turnId, items: [], status: "inProgress" });
+      // A late item must not reopen a completed/interrupted turn.
+      const turn = this.ensureTurn(session, { id: params.turnId, items: [] });
       this.upsertItem(turn, params.item);
+      this.stopLateInterruptedCommand(threadId, params.turnId, params.item);
       if (params.item.type === "userMessage" && !session.title) {
         const text = params.item.content?.find((input) => input.type === "text")?.text;
         if (text) session.title = summarizeTitle(text);
@@ -601,6 +644,9 @@ export class CodexSessionRuntime extends EventEmitter {
       this.pendingRequests.delete(String(params.requestId));
     }
     if (method === "turn/completed") {
+      if (this.turnBackgroundBaselines.get(threadId)?.turnId === params.turn?.id) {
+        this.turnBackgroundBaselines.delete(threadId);
+      }
       for (const [callId, owner] of this.codeModeCalls) {
         if (owner.threadId === threadId && owner.turnId === params.turn?.id) {
           this.codeModeCalls.delete(callId);
@@ -650,7 +696,7 @@ export class CodexSessionRuntime extends EventEmitter {
 
   applyDelta(session, method, params) {
     if (!params.turnId || !params.itemId) return;
-    const turn = this.ensureTurn(session, { id: params.turnId, items: [], status: "inProgress" });
+    const turn = this.ensureTurn(session, { id: params.turnId, items: [] });
     let item = turn.items.find((candidate) => candidate.id === params.itemId);
     if (!item) {
       item = deltaPlaceholder(method, params.itemId);
@@ -788,6 +834,39 @@ export class CodexSessionRuntime extends EventEmitter {
 
   recordAppliedThreadSettings(threadId, settings) {
     this.appliedThreadSettings.set(threadId, normalizeThreadSettings(settings));
+  }
+
+  recordNativeSettings(session, result, fallback = {}) {
+    // Keep requested DSH settings separate from settings acknowledged by Codex.
+    const settings = compactObject({
+      model: result.model,
+      effort: Object.hasOwn(result, "reasoningEffort") ? result.reasoningEffort : result.effort,
+      serviceTier: result.serviceTier,
+      approvalPolicy: result.approvalPolicy,
+      sandboxPolicy: result.sandbox ?? result.sandboxPolicy,
+      cwd: result.cwd,
+      multiAgentMode: result.multiAgentMode,
+    });
+    session.nativeSettings = { ...session.nativeSettings, ...settings };
+    this.recordAppliedThreadSettings(session.id, { ...fallback, ...settings });
+  }
+
+  failActiveTurns(error) {
+    this.pendingRequests.clear();
+    this.codeModeCalls.clear();
+    this.turnBackgroundBaselines.clear();
+    for (const session of this.sessions.values()) {
+      for (const turn of session.turns) {
+        if (turn.status !== "inProgress") continue;
+        turn.status = "failed";
+        turn.error = { message: error.message, code: error.code };
+        session.status = { type: "idle" };
+        // Settle the DSH stream on transport loss instead of leaving it waiting.
+        this.emit("activity", { method: "turn/completed", params: {
+          threadId: session.id, turn: structuredClone(turn),
+        } });
+      }
+    }
   }
 }
 

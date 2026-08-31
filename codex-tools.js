@@ -63,8 +63,10 @@ export async function handleCodexServerRequest(ctx, { adapter, runtime, request 
       return;
     }
     if (request.method === "item/tool/requestUserInput") {
+      const ownership = adapter.captureRequestOwnership(request);
       const questions = normalizeQuestions(request.params?.questions ?? []);
       const answer = await ctx.userQuestions.ask({ agent, questions });
+      adapter.assertRequestOwnership(ownership, request);
       await runtime.resolveRequest(request.id, { answers: normalizeAnswers(answer) });
       return;
     }
@@ -77,7 +79,8 @@ export async function handleCodexServerRequest(ctx, { adapter, runtime, request 
 async function handleDynamicTool(runtime, request, adapter, agent, sessionId) {
   const { namespace, name: tool } = requestedTool(request.params);
   if ((namespace === "codex_app" || !namespace) && tool === "load_workspace_dependencies") {
-    runtime.respondDynamicTool(request.id, true, workspaceDependenciesText());
+    const result = workspaceDependenciesResult();
+    runtime.respondDynamicTool(request.id, result.success, result.text);
     return;
   }
   if (namespace === "codex_app") {
@@ -89,13 +92,19 @@ async function handleDynamicTool(runtime, request, adapter, agent, sessionId) {
       runtime.respondDynamicTool(request.id, false, `DSH tool ${tool} is not available for this DSH turn.`);
       return;
     }
+    const ownership = adapter.captureRequestOwnership(request);
+    const signal = adapter.signalForInteractionThread(request.params?.threadId)
+      ?? request.signal ?? new AbortController().signal;
+    signal.throwIfAborted();
     const result = await agent.ctx.tools.execute({
       callId: `codex:${request.id}`,
       name: tool,
       arguments: requestedArguments(request.params),
       agent,
-      signal: request.signal ?? new AbortController().signal,
+      signal,
     });
+    signal.throwIfAborted();
+    adapter.assertRequestOwnership(ownership, request);
     runtime.respondDynamicTool(request.id, !result.isError, toolResultText(result));
     return;
   }
@@ -144,25 +153,30 @@ function splitToolName(namespace, name) {
   return { namespace, name };
 }
 
-function workspaceDependenciesText() {
+function workspaceDependenciesResult() {
   const root = primaryRuntimeRoot();
   const dependencies = join(root, "dependencies");
   const version = runtimeVersion(root);
-  return [
-    "Workspace dependencies are available for this local desktop thread.",
+  const paths = [
+    ["Git executable", "bin/fallback/git"],
+    ["Node.js executable", "node/bin/node"],
+    ["Node.js packages", "node/node_modules"],
+    ["pnpm executable", "bin/fallback/pnpm"],
+    ["Python executable", "python/bin/python3"],
+    ["Python packages", "python"],
+    ["Override binaries", "bin/override"],
+    ["Fallback binaries", "bin/fallback"],
+  ].map(([label, relative]) => [label, join(dependencies, relative)])
+    .filter(([, path]) => existsSync(path));
+  const available = paths.some(([label]) => label === "Node.js executable" || label === "Python executable");
+  if (!available) return { success: false, text: "No bundled Node.js or Python runtime was found. Use available system tools or configure CODEX_PRIMARY_RUNTIME_ROOT; do not assume Desktop dependencies are installed." };
+  return { success: true, text: [
+    "These local runtime paths exist. Individual packages have not been exhaustively validated.",
     "",
     "### Workspace Dependencies",
-    "Use these bundled paths for sheets, slides, documents, PDFs, images, or browser automation:",
     `- Bundle version: \`${version}\``,
-    `- Git executable: \`${join(dependencies, "bin/fallback/git")}\``,
-    `- Node.js executable: \`${join(dependencies, "node/bin/node")}\``,
-    `- Node.js packages: \`${join(dependencies, "node/node_modules")}\``,
-    `- pnpm executable: \`${join(dependencies, "bin/fallback/pnpm")}\``,
-    `- Python executable: \`${join(dependencies, "python/bin/python3")}\``,
-    `- Python packages: \`${join(dependencies, "python")}\``,
-    `- Override binaries: \`${join(dependencies, "bin/override")}\``,
-    `- Fallback binaries: \`${join(dependencies, "bin/fallback")}\``,
-  ].join("\n");
+    ...paths.map(([label, path]) => `- ${label}: \`${path}\``),
+  ].join("\n") };
 }
 
 function primaryRuntimeRoot() {

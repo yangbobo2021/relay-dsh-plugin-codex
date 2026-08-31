@@ -24,6 +24,7 @@ import {
 } from "../codex-image.js";
 import { CodexLinkStore } from "../codex-link-store.js";
 import { CODEX_APP_DYNAMIC_TOOLS, handleCodexServerRequest } from "../codex-tools.js";
+import { CODEX_EXECUTION_GUIDANCE } from "../execution-guidance.mjs";
 
 
 test("the Codex preset streams reasoning and answers into the native DSH conversation", async () => {
@@ -88,6 +89,45 @@ test("an empty App Server reasoning item creates no empty DSH disclosure", async
   assert.equal(chunks.at(-1).reason.kind, "stop");
 });
 
+test("execution guidance is scoped to new native threads and may be disabled", async () => {
+  for (const executionGuidance of [true, false]) {
+    const runtime = new FakeRuntime();
+    const adapter = new CodexDshAdapter({ runtime, ready: Promise.resolve(), executionGuidance });
+    const agent = fakeAgent();
+    adapter.attachAgent(agent);
+    await adapter.ensureThread(agent.id);
+    assert.equal(runtime.createdConfig.developerInstructions, executionGuidance ? CODEX_EXECUTION_GUIDANCE : undefined);
+    assert.equal(runtime.createdConfig.baseInstructions, undefined);
+    assert.equal(runtime.createdConfig.sandbox, "workspace-write");
+    assert.equal(runtime.createdConfig.approvalPolicy, "on-request");
+    // Rebinding/resuming must not replace an existing thread's instructions.
+    await adapter.ensureThread(agent.id, [...CODEX_APP_DYNAMIC_TOOLS, { type: "function", name: "fixture" }]);
+    assert.equal(runtime.created, 1);
+  }
+});
+
+test("native comparison mode excludes DSH tools and guidance without changing permissions or thread continuity", async () => {
+  const runtime = new FakeRuntime();
+  const adapter = new CodexDshAdapter({ runtime, ready: Promise.resolve(), executionMode: "native" });
+  const agent = fakeAgent();
+  adapter.attachAgent(agent);
+  for (const text of ["first question", "continue"]) {
+    await collect(adapter.stream({
+      provider: "relay-codex", model: "codex-test", sessionId: agent.id,
+      tools: [{ name: "fixture_tool", description: "fixture", parameters: { type: "object" } }],
+      messages: [{ role: "user", source: { kind: "user" }, content: [{ type: "text", text }] }],
+    }));
+  }
+  assert.equal(runtime.created, 1);
+  assert.deepEqual(runtime.createdConfig.dynamicTools, []);
+  assert.equal(runtime.createdConfig.developerInstructions, undefined);
+  assert.equal(runtime.createdConfig.sandbox, "workspace-write");
+  assert.equal(runtime.createdConfig.approvalPolicy, "on-request");
+  assert.equal(adapter.hasDshTool(agent.id, "fixture_tool"), false);
+  assert.equal(adapter.activeTurnSignals.size, 0);
+  assert.throws(() => new CodexDshAdapter({ runtime, executionMode: "typo" }), /Unknown Codex execution mode/);
+});
+
 test("presentation preserves explicit phases and never emits command errors as success", async () => {
   const actions = [{ type: "read", command: "cat README.md", name: "README.md", path: "README.md" }];
   const runtime = new McpImageRuntime({
@@ -107,6 +147,32 @@ test("presentation preserves explicit phases and never emits command errors as s
   assert.equal(activity.output, "not found\n");
   const metadata = chunks.at(-1).replayState.response.codexPresentation.blocks;
   assert.deepEqual(metadata, [{ index: 0, itemId: "mcp-image-answer", phase: "final_answer" }]);
+});
+
+test("dynamic tool results retain their text, identity and failure in persisted DSH history", async () => {
+  for (const success of [true, false]) {
+    const text = success ? '{"available":false,"status":404}' : "Plugin source returned HTTP 404.";
+    const runtime = new McpImageRuntime({
+      type: "dynamicToolCall", id: "dynamic-result", namespace: "dsh", tool: "plugin_discover",
+      arguments: { action: "inspect", target: "fixture-plugin" }, status: "completed", success,
+      contentItems: [{ type: "inputText", text }],
+    });
+    const adapter = new CodexDshAdapter({ runtime, ready: Promise.resolve() });
+    const agent = fakeAgent();
+    adapter.attachAgent(agent);
+    const chunks = await collect(adapter.stream({
+      provider: "relay-codex", model: "codex-test", sessionId: agent.id,
+      messages: [{ role: "user", source: { kind: "user" }, content: [{ type: "text", text: "inspect" }] }],
+    }));
+    const activity = activityEvents(agent).at(-1).data.activity;
+    assert.equal(activity.output, text);
+    assert.equal(activity.title, "dsh / plugin_discover");
+    assert.equal(activity.status, success ? "completed" : "error");
+    const result = agent.appended.findLast(event => event.type === "tool/result").data.message.content[0];
+    assert.equal(result.content[0].text, text);
+    assert.equal(result.isError, !success);
+    assert.equal(chunks.filter(chunk => chunk.type === "text-delta").some(chunk => chunk.text.includes(text)), false);
+  }
 });
 
 test("command output is persisted as activity and never pollutes assistant markdown", async () => {
@@ -2073,6 +2139,60 @@ test("subagent activity routes descendant interactions only while the owning roo
   assert.match(interactions.rejected.at(-1).error.message, /no owning live DSH Session/);
 });
 
+test("cancelled DSH dynamic tools receive the turn signal and cannot send a late success", async () => {
+  const adapterRuntime = new FakeRuntime();
+  const adapter = new CodexDshAdapter({ runtime: adapterRuntime, ready: Promise.resolve() });
+  const agent = fakeAgent();
+  adapter.attachAgent(agent);
+  await adapter.ensureThread(agent.id);
+  adapter.dshToolNames.set(agent.id, new Set(["wait_fixture"]));
+  const controller = new AbortController();
+  adapter.activeTurnSignals.set("thread-1", controller.signal);
+  const started = Promise.withResolvers();
+  agent.ctx = { tools: { execute: async ({ signal }) => {
+    assert.equal(signal, controller.signal);
+    started.resolve();
+    await new Promise(resolve => signal.addEventListener("abort", resolve, { once: true }));
+    return { content: [{ type: "text", text: "late result" }] };
+  } } };
+  const runtime = new InteractionRuntime();
+  const pending = handleCodexServerRequest({ agents: { get: () => agent } }, {
+    adapter, runtime, request: request("cancelled-tool", "item/dynamicTool/call", {
+      namespace: "dsh", name: "wait_fixture", arguments: {},
+    }),
+  });
+  await started.promise;
+  controller.abort();
+  await pending;
+  assert.equal(runtime.dynamic.length, 0);
+  assert.equal(runtime.rejected.length, 1);
+});
+
+test("a late question answer cannot be delivered after its DSH session is detached", async () => {
+  const adapterRuntime = new FakeRuntime();
+  const adapter = new CodexDshAdapter({ runtime: adapterRuntime, ready: Promise.resolve() });
+  const agent = fakeAgent();
+  adapter.attachAgent(agent);
+  await adapter.ensureThread(agent.id);
+  const asked = Promise.withResolvers();
+  const answer = Promise.withResolvers();
+  const runtime = new InteractionRuntime();
+  const pending = handleCodexServerRequest({
+    agents: { get: () => agent },
+    userQuestions: { ask() { asked.resolve(); return answer.promise; } },
+  }, {
+    adapter, runtime, request: request("stale-question", "item/tool/requestUserInput", {
+      questions: [{ id: "q", header: "Choice", question: "Continue?" }],
+    }),
+  });
+  await asked.promise;
+  adapter.detachAgent(agent.id);
+  answer.resolve({ answers: [{ id: "q", selected: ["yes"] }] });
+  await pending;
+  assert.equal(runtime.resolved.length, 0);
+  assert.match(runtime.rejected[0].error.message, /stale/);
+});
+
 test("Relay exposes only the executable Codex app workspace dependency tool", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "relay-codex-runtime-"));
   const previousRuntimeRoot = process.env.CODEX_PRIMARY_RUNTIME_ROOT;
@@ -2105,10 +2225,24 @@ test("Relay exposes only the executable Codex app workspace dependency tool", as
       arguments: "{}",
     }),
   });
+  assert.equal(runtime.dynamic.at(-1).success, false);
+  assert.match(runtime.dynamic.at(-1).text, /No bundled Node.js or Python runtime/);
+  for (const relative of ["node/bin/node", "python/bin/python3"]) {
+    const path = join(directory, "dependencies", relative);
+    await mkdir(join(path, ".."), { recursive: true });
+    await writeFile(path, "fixture", { mode: 0o755 });
+  }
+  await handleCodexServerRequest(ctx, {
+    adapter, runtime,
+    request: request("deps-2", "item/dynamicTool/call", {
+      namespace: "codex_app", name: "load_workspace_dependencies", arguments: "{}",
+    }),
+  });
   assert.equal(runtime.dynamic.at(-1).success, true);
   assert.match(runtime.dynamic.at(-1).text, /Bundle version: `99\.test`/);
   assert.match(runtime.dynamic.at(-1).text, /Node\.js executable: `.*dependencies\/node\/bin\/node`/);
   assert.match(runtime.dynamic.at(-1).text, /Python executable: `.*dependencies\/python\/bin\/python3`/);
+  assert.doesNotMatch(runtime.dynamic.at(-1).text, /pnpm executable|Node.js packages/);
 
   await handleCodexServerRequest(ctx, {
     adapter,

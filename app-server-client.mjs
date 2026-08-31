@@ -4,9 +4,9 @@ import readline from "node:readline";
 import { codexSpawnError, resolveCodexLaunch } from "./codex-command.mjs";
 
 const NATIVE_CODEX_CLIENT_INFO = {
-  name: "Codex Desktop",
-  title: "Codex Desktop",
-  version: "26.810.52044",
+  name: "relay_codex",
+  title: "DSH Codex",
+  version: "0.1.5",
 };
 
 export const RELAY_CODEX_APP_SERVER_ARGS = [
@@ -22,13 +22,9 @@ const BYPASS_HOOK_TRUST_FLAG = "--dangerously-bypass-hook-trust";
 
 const NATIVE_CODEX_CAPABILITIES = {
   experimentalApi: true,
-  extensions: {
-    "io.modelcontextprotocol/ui": {
-      mimeTypes: ["text/html;profile=mcp-app", "text/html+skybridge"],
-    },
-  },
   mcpServerOpenaiFormElicitation: false,
-  requestAttestation: true,
+  // This host has no Desktop attestation provider or MCP App HTML renderer.
+  requestAttestation: false,
   optOutNotificationMethods: [
     "thread/environment/connected",
     "thread/environment/disconnected",

@@ -30,6 +30,8 @@ export function createDshCodexPlugin(ctx, config = {}) {
         linkStore,
         attachments: ctx.attachments, logger: ctx.logger,
         dynamicTools: CODEX_APP_DYNAMIC_TOOLS,
+        executionGuidance: config.codexExecutionGuidance !== false,
+        executionMode: config.codexExecutionMode ?? "enhanced",
       });
       const target = new DshCodexImportTarget({ ctx, runtime, adapter, logger: ctx.logger });
       const importer = new CodexWorkspaceImporter({

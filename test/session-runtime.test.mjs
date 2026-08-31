@@ -32,9 +32,11 @@ test("Codex threads keep their context across turns, switching, and resume", asy
   assert.deepEqual(firstStart.params.config, { "features.realtime_conversation": false });
   assert.equal(firstStart.params.personality, "friendly");
   assert.equal(firstStart.params.experimentalRawEvents, true);
+  assert.equal(Object.hasOwn(firstStart.params, "serviceTier"), false);
   const firstResume = client.requests.find(request => request.method === "thread/resume");
   assert.deepEqual(firstResume.params.dynamicTools, tools);
   assert.equal(firstResume.params.config, undefined);
+  assert.equal(Object.hasOwn(firstResume.params, "serviceTier"), false);
   const firstTurn = client.requests.find(request => request.method === "turn/start");
   assert.deepEqual(firstTurn.params.input, [{ type: "text", text: "first turn", text_elements: [] }]);
   assert.equal(firstTurn.params.summary, "auto");
@@ -44,7 +46,10 @@ test("Codex threads keep their context across turns, switching, and resume", asy
   assert.match(firstTurn.params.clientUserMessageId, /^[0-9a-f-]{36}$/);
   assert.equal(firstTurn.params.model, null);
   assert.equal(firstTurn.params.effort, null);
-  assert.equal(firstTurn.params.serviceTier, null);
+  for (const request of client.requests.filter(request => request.method === "turn/start")) {
+    assert.equal(Object.hasOwn(request.params, "serviceTier"), false,
+      "turn/start must inherit native speed settings, not clear priority with null");
+  }
   assert.equal(firstTurn.params.outputSchema, null);
   assert.equal(firstTurn.params.approvalsReviewer, "user");
   await runtime.close();
@@ -76,7 +81,6 @@ test("Codex forks branch through App Server thread/fork at the requested complet
     cwd: "/workspace/relay",
     model: "codex-test",
     modelProvider: null,
-    serviceTier: null,
     config: { "features.realtime_conversation": false },
     approvalsReviewer: "user",
     approvalPolicy: "never",
@@ -405,6 +409,70 @@ test("turn interruption fails closed when targeted process cleanup cannot be con
   await runtime.close();
 });
 
+test("cancellation catches code-mode processes before item notifications without killing earlier work", async () => {
+  const client = new FakeCodexClient();
+  client.startTurn = () => ({ turn: { id: "turn-early", status: "inProgress", items: [], error: null } });
+  const runtime = new CodexSessionRuntime({ client, cwd: "/workspace/relay" });
+  await runtime.initialize();
+  const session = await runtime.createSession();
+  const earlier = { itemId: "earlier-server", processId: "99", command: "keep-running" };
+  client.backgroundTerminals = [earlier];
+  await runtime.sendMessage(session.id, { text: "run the long command" });
+  client.backgroundTerminals.push({ itemId: "not-yet-announced", processId: "42", command: "long-command" });
+  assert.equal(runtime.getSession(session.id).turns[0].items.length, 0);
+
+  await runtime.interruptTurn(session.id, "turn-early");
+
+  assert.deepEqual(client.backgroundTerminals, [earlier]);
+  const terminate = client.requests.findIndex(r => r.method === "thread/backgroundTerminals/terminate");
+  const interrupt = client.requests.findIndex(r => r.method === "turn/interrupt");
+  assert.ok(terminate >= 0 && terminate < interrupt);
+  assert.equal(client.requests[terminate].params.processId, "42");
+  await runtime.close();
+});
+
+test("late native commands after cancellation are stopped without reopening the old turn or touching the new one", async () => {
+  const client = new FakeCodexClient();
+  const runtime = new CodexSessionRuntime({ client, cwd: "/workspace/relay" });
+  await runtime.initialize();
+  const session = await runtime.createSession();
+  client.notify("turn/started", { threadId: session.id, turn: { id: "old", status: "inProgress", items: [] } });
+  await runtime.interruptTurn(session.id, "old");
+  client.notify("turn/completed", { threadId: session.id, turn: { id: "old", status: "interrupted", items: [] } });
+  client.notify("turn/started", { threadId: session.id, turn: { id: "new", status: "inProgress", items: [] } });
+  client.backgroundTerminals = [{ itemId: "late-old", processId: "42" }, { itemId: "keep-new", processId: "99" }];
+  const late = { threadId: session.id, turnId: "old", item: { id: "late-old", type: "commandExecution", status: "inProgress", processId: "42" } };
+  client.notify("item/started", late);
+  client.notify("item/started", late);
+  client.notify("turn/diff/updated", { threadId: session.id, turnId: "old", diff: "late diff" });
+  client.notify("turn/plan/updated", { threadId: session.id, turnId: "old", plan: [] });
+  client.notify("item/commandExecution/outputDelta", { threadId: session.id, turnId: "old", itemId: "late-old", delta: "late output\n" });
+  client.notify("item/started", { threadId: session.id, turnId: "new", item: { id: "keep-new", type: "commandExecution", status: "inProgress", processId: "99" } });
+  await tick();
+  assert.deepEqual(client.backgroundTerminals, [{ itemId: "keep-new", processId: "99" }]);
+  assert.equal(client.requests.filter(r => r.method === "thread/backgroundTerminals/terminate" && r.params.processId === "42").length, 1);
+  assert.equal(runtime.getSession(session.id).turns.find(t => t.id === "old").status, "interrupted");
+  assert.equal(runtime.getSession(session.id).turns.find(t => t.id === "new").status, "inProgress");
+  await runtime.close();
+});
+
+test("failure to stop a late command is observable instead of silently swallowed", async () => {
+  const client = new FakeCodexClient();
+  const runtime = new CodexSessionRuntime({ client, cwd: "/workspace/relay" });
+  await runtime.initialize();
+  const session = await runtime.createSession();
+  client.notify("turn/started", { threadId: session.id, turn: { id: "old", status: "inProgress", items: [] } });
+  await runtime.interruptTurn(session.id, "old");
+  client.notify("turn/completed", { threadId: session.id, turn: { id: "old", status: "interrupted", items: [] } });
+  client.unterminableProcessIds.add("42");
+  const errors=[];runtime.on("activity", e => { if(e.method === "error")errors.push(e); });
+  client.notify("item/started", { threadId: session.id, turnId: "old", item: { id: "late", type: "commandExecution", status: "inProgress", processId: "42" } });
+  await tick();
+  assert.equal(errors[0].params.error.code, "CODEX_TURN_INTERRUPT_CLEANUP_FAILED");
+  assert.equal(runtime.getSession(session.id).turns.find(t => t.id === "old").error.code, "CODEX_TURN_INTERRUPT_CLEANUP_FAILED");
+  await runtime.close();
+});
+
 test("turn interruption catches a background process that appears during the interrupt race", async () => {
   const client = new InterruptRaceCodexClient();
   const runtime = new CodexSessionRuntime({ client, cwd: "/workspace/relay" });
@@ -563,6 +631,50 @@ test("ephemeral auxiliary threads carry isolated instructions and are released",
   assert.deepEqual(client.requests.at(-1), {
     method: "thread/unsubscribe", params: { threadId: session.id },
   });
+  await runtime.close();
+});
+
+test("resume and settings notifications preserve acknowledged native settings without masking a pending user override", async () => {
+  const client = new FakeCodexClient();
+  const runtime = new CodexSessionRuntime({ client, cwd: "/workspace/relay" });
+  await runtime.initialize();
+  const created = await runtime.createSession({ model: "codex-test", effort: "high" });
+  const originalRequest = client.request.bind(client);
+  client.request = async (method, params) => {
+    const result = await originalRequest(method, params);
+    return method === "thread/resume" ? { ...result, model: "codex-test", reasoningEffort: "low", serviceTier: "priority" } : result;
+  };
+  await runtime.resumeSession(created.id, { model: "codex-test", effort: "high" });
+  assert.equal(runtime.getSession(created.id).nativeSettings.serviceTier, "priority");
+  assert.equal(runtime.getSession(created.id).nativeSettings.effort, "low");
+  await runtime.sendMessage(created.id, { text: "continue with the requested effort" });
+  assert.equal(client.requests.find(r => r.method === "thread/settings/update").params.effort, "high");
+  client.notify("thread/settings/updated", { threadId: created.id, threadSettings: {
+    model: "codex-test", effort: "low", serviceTier: null,
+  } });
+  assert.equal(runtime.getSession(created.id).nativeSettings.serviceTier, null);
+  await runtime.sendMessage(created.id, { text: "continue after native settings change" });
+  assert.equal(client.requests.filter(r => r.method === "thread/settings/update").length, 2);
+  assert.ok(client.requests.filter(r => r.method === "turn/start").every(r => !Object.hasOwn(r.params, "serviceTier")));
+  await runtime.close();
+});
+
+test("an unexpected App Server exit settles running turns and clears pending interactions", async () => {
+  const client = new FakeCodexClient();
+  const runtime = new CodexSessionRuntime({ client, cwd: "/workspace/relay" });
+  await runtime.initialize();
+  const session = await runtime.createSession();
+  client.notify("turn/started", { threadId: session.id, turn: { id: "running", status: "inProgress", items: [] } });
+  client.serverRequest("pending", "item/tool/requestUserInput", { threadId: session.id });
+  const activity = [];
+  runtime.on("activity", message => activity.push(message));
+  const waiting = runtime.waitForTurn(session.id, "running", { timeoutMs: 1000 });
+  client.emit("exit", { code: 1 });
+  const completed = await waiting;
+  assert.equal(completed.status, "failed");
+  assert.equal(completed.error.code, "CODEX_APP_SERVER_EXITED");
+  assert.equal(runtime.pendingRequests.size, 0);
+  assert.equal(activity.filter(m => m.method === "turn/completed").length, 1);
   await runtime.close();
 });
 

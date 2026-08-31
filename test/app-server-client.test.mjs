@@ -147,7 +147,7 @@ test("an App Server child exit rejects initialization and reports the exit", asy
   assert.equal(exit.code, 7);
 });
 
-test("initialization advertises native Codex Desktop capabilities by default", async () => {
+test("initialization identifies DSH and advertises only implemented capabilities", async () => {
   const fixture = [
     "const readline = require('node:readline')",
     "const input = readline.createInterface({ input: process.stdin })",
@@ -155,10 +155,10 @@ test("initialization advertises native Codex Desktop capabilities by default", a
     "  const message = JSON.parse(line)",
     "  if (message.method !== 'initialize') return",
     "  const capabilities = message.params.capabilities",
-    "  if (message.params.clientInfo.name !== 'Codex Desktop') process.exit(8)",
-    "  if (capabilities.experimentalApi !== true || capabilities.requestAttestation !== true) process.exit(9)",
+    "  if (message.params.clientInfo.name !== 'relay_codex') process.exit(8)",
+    "  if (capabilities.experimentalApi !== true || capabilities.requestAttestation !== false) process.exit(9)",
     "  if (capabilities.mcpServerOpenaiFormElicitation !== false) process.exit(10)",
-    "  if (!capabilities.extensions?.['io.modelcontextprotocol/ui']?.mimeTypes?.includes('text/html+skybridge')) process.exit(11)",
+    "  if (capabilities.extensions?.['io.modelcontextprotocol/ui']) process.exit(11)",
     "  if (!capabilities.optOutNotificationMethods?.includes('codex/event/task_started')) process.exit(12)",
     "  if (capabilities.optOutNotificationMethods?.includes('command/exec/outputDelta')) process.exit(13)",
     "  if (capabilities.optOutNotificationMethods?.includes('rawResponseItem/completed')) process.exit(14)",

@@ -8,6 +8,7 @@ import { importCodexGeneratedImage, importCodexImage, importCodexMcpImage } from
 import { materializeCodexAttachment } from "./codex-image-input.js";
 import { CODEX_APP_DYNAMIC_TOOLS, codexDynamicTools } from "./codex-tools.js";
 import { rebindRequiredStatus } from "./connection-status.mjs";
+import { CODEX_EXECUTION_GUIDANCE } from "./execution-guidance.mjs";
 
 export const CODEX_PRESET = "relay-codex";
 export const CODEX_PROVIDER = "relay-codex";
@@ -25,6 +26,8 @@ export class CodexDshAdapter extends LlmAdapter {
     attachments = null,
     logger = console,
     dynamicTools = CODEX_APP_DYNAMIC_TOOLS,
+    executionGuidance = true,
+    executionMode = "enhanced",
   }) {
     super();
     this.runtime = runtime;
@@ -32,7 +35,12 @@ export class CodexDshAdapter extends LlmAdapter {
     this.logger = logger;
     this.linkStore = linkStore;
     this.attachments = attachments;
-    this.dynamicTools = dynamicTools;
+    if (!["enhanced", "native"].includes(executionMode)) {
+      throw new Error(`Unknown Codex execution mode: ${executionMode}`);
+    }
+    this.executionMode = executionMode;
+    this.dynamicTools = executionMode === "native" ? [] : dynamicTools;
+    this.executionGuidance = executionMode !== "native" && executionGuidance ? CODEX_EXECUTION_GUIDANCE : undefined;
     this.links = new Map();
     this.settings = new Map();
     this.bindingModes = new Map();
@@ -47,6 +55,7 @@ export class CodexDshAdapter extends LlmAdapter {
     this.subagentBindings = new Map();
     this.subagentBindingConflicts = new Set();
     this.activeRootTurns = new Map();
+    this.activeTurnSignals = new Map();
     for (const [sessionId, record] of linkStore?.entries() ?? []) {
       if (record.threadId) this.links.set(sessionId, record.threadId);
       this.settings.set(sessionId, record.config);
@@ -250,7 +259,10 @@ export class CodexDshAdapter extends LlmAdapter {
         throw persistedResumeError(sessionId, linked, error, this);
       }
     }
-    const created = await this.runtime.createSession(settings);
+    const created = await this.runtime.createSession({
+      ...settings,
+      ...(this.executionGuidance ? { developerInstructions: settings.developerInstructions ?? this.executionGuidance } : {}),
+    });
     this.links.set(sessionId, created.id);
     this.bumpBindingEpoch(sessionId);
     this.appliedDynamicToolSignatures.set(sessionId, signature);
@@ -545,6 +557,11 @@ export class CodexDshAdapter extends LlmAdapter {
     return this.dshToolNames.get(String(sessionId))?.has(name) === true;
   }
 
+  signalForInteractionThread(threadId) {
+    const binding = this.interactionBindingForThread(threadId);
+    return binding ? this.activeTurnSignals.get(binding.rootThreadId) : undefined;
+  }
+
   async *stream(options) {
     if (options.purpose) {
       yield* this.streamAuxiliary(options);
@@ -564,7 +581,7 @@ export class CodexDshAdapter extends LlmAdapter {
       ...nativePermissions,
       cwd: agent.session.header.cwd,
     });
-    const dshTools = options.tools ?? [];
+    const dshTools = this.executionMode === "native" ? [] : options.tools ?? [];
     this.dshToolNames.set(sessionId, new Set(dshTools.map(tool => tool.name)));
     const threadId = await this.ensureThread(
       sessionId,
@@ -579,6 +596,9 @@ export class CodexDshAdapter extends LlmAdapter {
     };
     const stopActivity = subscribeRuntimeActivity(this.runtime, onActivity);
     this.activeRootTurns.set(threadId, (this.activeRootTurns.get(threadId) ?? 0) + 1);
+    const turnController = new AbortController();
+    const turnSignal = options.signal ? AbortSignal.any([options.signal, turnController.signal]) : turnController.signal;
+    this.activeTurnSignals.set(threadId, turnSignal);
 
     let turnId = null;
     const state = createStreamState();
@@ -646,6 +666,8 @@ export class CodexDshAdapter extends LlmAdapter {
       }
       throw error;
     } finally {
+      turnController.abort();
+      if (this.activeTurnSignals.get(threadId) === turnSignal) this.activeTurnSignals.delete(threadId);
       // Interrupt RPCs can deliver the last stdout/settlement after next() has
       // rejected. Retain only already-owned commands, never new work or prose.
       if (options.signal?.aborted) {
@@ -1243,7 +1265,8 @@ function normalizeCodexActivity(item, phase) {
   const type = String(item.type ?? "toolUse");
   const failed = ["failed", "declined", "cancelled", "canceled"].includes(item.status)
     || (item.exitCode != null && Number(item.exitCode) !== 0)
-    || item.result?.isError === true || item.error != null;
+    || item.result?.isError === true || item.error != null
+    || (item.type === "dynamicToolCall" && item.success === false);
   const status = phase === "started" ? "running" : failed ? "error" : "completed";
   return bounded({
     type,
@@ -1264,6 +1287,7 @@ function codexActivityTitle(item) {
   if (item.type === "imageGeneration") return "Generated an image";
   if (item.type === "webSearch") return "Searched web";
   if (item.type === "mcpToolCall") return mcpActivityTitle(item);
+  if (item.type === "dynamicToolCall") return [item.namespace, item.tool ?? item.name].filter(Boolean).join(" / ") || "Dynamic Tool Call";
   if (item.type === "plan") return "Updated plan";
   return humanize(item.type ?? "Activity");
 }
@@ -1284,6 +1308,13 @@ function codexActivityInput(item) {
 }
 
 function codexActivityOutput(item) {
+  if (item.type === "dynamicToolCall" && Array.isArray(item.contentItems) && item.contentItems.length > 0) {
+    return item.contentItems.map(content => {
+      if (typeof content.text === "string") return content.text;
+      // Media is rendered through the attachment path, never as base64 text.
+      return `[${content.type ?? "tool result"}]`;
+    }).join("\n");
+  }
   return item.aggregatedOutput ?? item.output ?? item.result ?? item.error;
 }
 
