@@ -2,7 +2,7 @@
 
 > **稳定版 `0.2.3` 已在官方 DSH `0.1.5-rc.2` 和 `0.1.6-alpha.1` 上验证。** 实现已同时兼容持久化与实时 Assistant 流、两种持久化读取响应结构，以及新版 DSH 契约要求的结算元数据；peer 元数据已声明两个精确版本。[从 npm 安装](https://www.npmjs.com/package/relay-dsh-plugin-codex) · [兼容性证据](https://github.com/yangbobo2021/Relay/tree/codex/relay-foundation/dsh-lab/dsh-0.1.6-alpha.1-20260915)。
 
-> **发布通道：** `latest` → `0.2.3`；`next` → `0.2.3-rc.3`。
+> **发布通道：** `latest` → `0.2.3`；`next` → `0.2.4-rc.1`。
 
 ```bash
 npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add relay-dsh-plugin-codex@next
@@ -136,7 +136,7 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add relay-dsh-plugin-codex@
 npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add relay-dsh-plugin-codex@next
 ```
 
-`next` 标签指向 `0.2.3-rc.3`；`latest` 指向 `0.2.2`。
+`next` 标签指向 `0.2.4-rc.1`；`latest` 指向 `0.2.2`。
 安装前请以 npm 注册表中实际发布的 dist-tag 为准。
 
 本次预发布保留原生服务档位和恢复后的配置，修复取消轮次的迟到命令清理，
@@ -160,7 +160,7 @@ npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add github:yangbobo2021/
 SHA。例如：
 
 ```bash
-npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add github:yangbobo2021/relay-dsh-plugin-codex#v0.2.3-rc.3
+npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add github:yangbobo2021/relay-dsh-plugin-codex#v0.2.4-rc.1
 ```
 
 官方 DSH CLI 会在需要时初始化 `web` Profile，通过 `pnpm` 安装所选软件包，
