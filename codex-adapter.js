@@ -7,7 +7,7 @@ import { CODEX_ACTIVITY_TOOL } from "./codex-activity-wire.mjs";
 
 import { importCodexGeneratedImage, importCodexImage, importCodexMcpImage } from "./codex-image.js";
 import { materializeCodexAttachment } from "./codex-image-input.js";
-import { CODEX_APP_DYNAMIC_TOOLS, codexDynamicTools } from "./codex-tools.js";
+import { CODEX_APP_DYNAMIC_TOOLS, codexDshToolSurface } from "./codex-tools.js";
 import { rebindRequiredStatus } from "./connection-status.mjs";
 import { CODEX_EXECUTION_GUIDANCE } from "./execution-guidance.mjs";
 
@@ -555,7 +555,11 @@ export class CodexDshAdapter extends LlmAdapter {
   }
 
   hasDshTool(sessionId, name) {
-    return this.dshToolNames.get(String(sessionId))?.has(name) === true;
+    return this.dshToolName(sessionId, name) !== undefined;
+  }
+
+  dshToolName(sessionId, name) {
+    return this.dshToolNames.get(String(sessionId))?.get(name);
   }
 
   signalForInteractionThread(threadId) {
@@ -584,12 +588,13 @@ export class CodexDshAdapter extends LlmAdapter {
       cwd: agent.session.header.cwd,
     });
     const dshTools = this.executionMode === "native" ? [] : options.tools ?? [];
-    this.dshToolNames.set(sessionId, new Set(dshTools.map(tool => tool.name)));
+    const dshToolSurface = codexDshToolSurface(dshTools, this.dynamicTools);
     const threadId = await this.ensureThread(
       sessionId,
-      codexDynamicTools(dshTools, this.dynamicTools),
+      dshToolSurface.dynamicTools,
       inheritedCodexProvenance(options.messages),
     );
+    this.dshToolNames.set(sessionId, dshToolSurface.aliasToOriginal);
     const queue = new ActivityQueue(options.signal);
     const onActivity = (message) => {
       this.observeSubagentActivity(message);

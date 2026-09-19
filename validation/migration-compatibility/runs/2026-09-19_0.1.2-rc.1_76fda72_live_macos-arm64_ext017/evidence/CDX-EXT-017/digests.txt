@@ -1,0 +1,3 @@
+55e53cf776a8c213de99ce7163efa3d5344d22802a2648bdb1caa1a282fda018  relay-dsh-plugin-codex-0.2.4-rc.1.tgz
+81b190719417b020e6799b3c7e6061cbaa3f56c66083f45c2b03edbb1af8c0bd  installed/lib/client.js
+da5489b2f92d6d1d4b2c3d1788e0c593c4fec0b5935dff50d7a15fec1d462cfe  fixtures/mcp-reserved-name/server.mjs

@@ -48,6 +48,29 @@ effective environment into durable files under `CODEX_HOME/shell_snapshots`. Exp
 operator-supplied App Server arguments remain an exact override and carry responsibility
 for any snapshot policy they enable.
 
+## DSH MCP dynamic-tool name compatibility
+
+Enhanced-mode DSH tools are registered under the Codex App Server `dsh` namespace.
+DSH MCP clients may contribute names beginning with `mcp__`, but that prefix is
+reserved by Codex for its own MCP namespace and App Server rejects such a dynamic
+tool before a Turn starts. The plugin therefore applies a deterministic wire alias
+only to names with the reserved prefix. The alias starts with `relay_mcp__`, keeps
+the readable server/tool suffix, and never changes the original DSH tool name.
+
+The per-Session binding is a map from Codex alias to original DSH name. Dynamic tool
+calls resolve through this map before execution, so the DSH runtime receives the
+original name and arguments. Ordinary DSH names remain unchanged. Alias generation
+is stable across repeated turns and adds a deterministic digest when an ordinary
+tool already occupies the readable alias. Bindings are replaced with each turn's
+tool surface and removed when the Agent detaches; they are never shared between
+Sessions. Native mode continues to register no DSH dynamic tools.
+
+The compatibility contract requires registration, alias-to-original dispatch,
+mixed ordinary/MCP tools, collision handling, dynamic refresh, Session isolation,
+resume/fork continuity, and a real App Server registration check. Filtering a
+reserved tool is not an acceptable implementation because it silently removes the
+DSH capability.
+
 ## Plugin Hook trust propagation
 
 Codex evaluates installed Plugin Hooks when each Thread is started, forked, or

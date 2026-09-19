@@ -1,0 +1,54 @@
+{
+  "dshCommit": "76fda729799fe9b3848dbe2c211d4b231032b81e",
+  "run": "/var/folders/jh/mt3s144j7wg98ww3zyqc1np00000gn/T/relay-codex-delivery-vEwoQH",
+  "cases": [
+    {
+      "name": "Packed candidate: real Sol High baseline persisted and rendered",
+      "passed": true
+    },
+    {
+      "name": "Cold restart: real candidate tarball identity and old history after restart",
+      "passed": true
+    },
+    {
+      "name": "Real DSH MCP tool registers under a safe alias and returns the exact marker once",
+      "passed": true
+    },
+    {
+      "name": "Native DSH file activity persists the produced file; image attachment decodes at its actual dimensions",
+      "passed": true
+    },
+    {
+      "name": "Real edit/image-view/nonzero exit, and native Enter/Space at all disclosure levels",
+      "passed": true
+    },
+    {
+      "name": "Candidate history reload preserves the complete answer and collapsed process",
+      "passed": true
+    },
+    {
+      "name": "390 x 844 mobile reading viewport: readable groups/image, no document horizontal overflow",
+      "passed": true
+    },
+    {
+      "name": "Real UI stop settles the active command and preserves partial output",
+      "passed": true
+    },
+    {
+      "name": "Cold restart: cancelled and completed candidate histories load without unsupported events",
+      "passed": true
+    }
+  ],
+  "sessionId": "session-f32aaee7-040b-418e-bfd0-2397265341f5",
+  "clientSha256": "81b190719417b020e6799b3c7e6061cbaa3f56c66083f45c2b03edbb1af8c0bd",
+  "mcpAttempts": [
+    {
+      "attempt": 1,
+      "sessionId": "session-20b2156c-4cc3-40ea-b0d1-ab70bd544981",
+      "dynamicActivityCount": 1
+    }
+  ],
+  "reservedMcpSessionId": "session-20b2156c-4cc3-40ea-b0d1-ab70bd544981",
+  "uiSessionId": "session-4bd1b152-9ba7-44e4-8af5-ed40679fa65e",
+  "cancelSessionId": "session-3b945e89-a274-43fd-a1ca-fe50a94169cb"
+}

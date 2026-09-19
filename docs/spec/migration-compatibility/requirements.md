@@ -76,6 +76,7 @@ more independent cases under `validation/migration-compatibility/cases/`.
 | CDX-EXT-014 | P1 | Plugin Hook | Fixture hook observes or blocks its target event | failed |
 | CDX-EXT-015 | P1 | DSH-contributed tool | Advertised tool executes through the Codex `dsh` namespace | verified |
 | CDX-EXT-016 | P1 | Dynamic DSH tool refresh | A later turn sees the updated tool set | failed |
+| CDX-EXT-017 | P0 | Reserved DSH MCP tool name compatibility | An `mcp__`-prefixed DSH tool is aliased for Codex and executes through the original DSH name | ready |
 
 ## Configuration and instructions
 
