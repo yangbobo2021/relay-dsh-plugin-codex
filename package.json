@@ -115,7 +115,7 @@
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.2",
-    "@openai/codex": "0.149.0",
+    "@openai/codex": "0.155.1",
     "lucide-react": "^1.37.0",
     "relay-dsh-plugin-session-import": "0.2.3"
   },
