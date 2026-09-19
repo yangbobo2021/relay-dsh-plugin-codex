@@ -66,7 +66,8 @@ export class CodexSessionRuntime extends EventEmitter {
     try {
       await this.client.start();
       const [modelsResult, accountResult, threadsResult] = await Promise.all([
-        this.client.request("model/list", { limit: 50, includeHidden: false }),
+        this.client.initialModels
+          ?? this.client.request("model/list", { limit: 50, includeHidden: false }),
         this.client.request("account/read", { refreshToken: false }).catch((error) => {
           this.addDiagnostic(`account/read failed: ${error.message}`);
           return null;
@@ -85,7 +86,9 @@ export class CodexSessionRuntime extends EventEmitter {
         const session = this.upsertThread(thread, defaults);
         this.recordAppliedThreadSettings(session.id, defaults);
       }
-      this.setConnectionStatus(connectedCodexConnectionStatus());
+      this.setConnectionStatus(connectedCodexConnectionStatus(Date.now(), {
+        runtime: this.client.runtimeInfo ?? null,
+      }));
       this.emitChange();
       return this.snapshot();
     } catch (error) {
@@ -593,6 +596,26 @@ export class CodexSessionRuntime extends EventEmitter {
     this.closed = true;
     await this.client.close();
     this.interruptedTurns.clear();
+  }
+
+  isReloadSafe() {
+    if (this.pendingRequests.size > 0) return false;
+    return [...this.sessions.values()].every((session) =>
+      session.turns.every((turn) => turn.status !== "inProgress"));
+  }
+
+  adoptStateFrom(previous) {
+    if (!(previous instanceof CodexSessionRuntime)) {
+      throw new TypeError("Codex runtime state must come from another CodexSessionRuntime");
+    }
+    if (!previous.isReloadSafe()) {
+      throw new Error("Codex runtime cannot adopt state while a turn or interaction is active");
+    }
+    this.sessions = new Map(previous.sessions);
+    this.appliedThreadSettings = new Map(previous.appliedThreadSettings);
+    this.selectedSessionId = previous.selectedSessionId;
+    this.diagnostics = [...previous.diagnostics];
+    this.emitChange();
   }
 
   handleNotification(message) {

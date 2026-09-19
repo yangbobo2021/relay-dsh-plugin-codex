@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { CodexAppServerClient, RELAY_CODEX_APP_SERVER_ARGS } from "../app-server-client.mjs";
 
 test("default App Server launch disables persistent shell environment snapshots", () => {
-  const client = new CodexAppServerClient();
+  const client = new CodexAppServerClient({ command: "bundled" });
   assert.deepEqual(client.appServerArgs, RELAY_CODEX_APP_SERVER_ARGS);
   assert.deepEqual(client.appServerArgs, [
     "-c",
@@ -21,7 +24,7 @@ test("default App Server launch disables persistent shell environment snapshots"
 
 test("explicit App Server arguments remain an exact operator override", () => {
   const args = ["-c", "features.shell_snapshot=true", "app-server"];
-  const client = new CodexAppServerClient({ args });
+  const client = new CodexAppServerClient({ command: "bundled", args });
   assert.deepEqual(client.appServerArgs, args);
   assert.notEqual(client.appServerArgs, args);
   assert.equal(client.bypassHookTrust, false);
@@ -34,7 +37,7 @@ test("the exact Hook trust bypass flag is propagated without rewriting launch ar
     "--dangerously-bypass-hook-trust",
     "app-server",
   ];
-  const client = new CodexAppServerClient({ args });
+  const client = new CodexAppServerClient({ command: "bundled", args });
 
   assert.deepEqual(client.appServerArgs, args);
   assert.equal(client.bypassHookTrust, true);
@@ -46,17 +49,16 @@ test("Hook trust bypass text embedded in another argument does not enable the ov
     "operator_note=--dangerously-bypass-hook-trust",
     "app-server",
   ];
-  const client = new CodexAppServerClient({ args });
+  const client = new CodexAppServerClient({ command: "bundled", args });
 
   assert.equal(client.bypassHookTrust, false);
 });
 
 test("a missing Codex executable reports an actionable configuration error", async () => {
-  const client = new CodexAppServerClient({
+  assert.throws(() => new CodexAppServerClient({
     command: missingCodexPath(),
     requestTimeoutMs: 1_000,
-  });
-  await assert.rejects(client.start(), (error) => {
+  }), (error) => {
     assert.equal(error.code, "CODEX_EXECUTABLE_NOT_FOUND");
     return /RELAY_CODEX_COMMAND/.test(error.message);
   });
@@ -68,7 +70,7 @@ function missingCodexPath() {
 
 test("JSON-RPC requests resolve, reject, and time out with their method context", async () => {
   const writes = [];
-  const client = new CodexAppServerClient({ requestTimeoutMs: 15 });
+  const client = new CodexAppServerClient({ command: "bundled", requestTimeoutMs: 15 });
   client.process = {
     stdin: {
       writable: true,
@@ -97,7 +99,7 @@ test("JSON-RPC requests resolve, reject, and time out with their method context"
 
 test("long-running App Server requests can disable the client timeout", async () => {
   const writes = [];
-  const client = new CodexAppServerClient({ requestTimeoutMs: 5 });
+  const client = new CodexAppServerClient({ command: "bundled", requestTimeoutMs: 5 });
   client.process = {
     stdin: {
       writable: true,
@@ -114,7 +116,7 @@ test("long-running App Server requests can disable the client timeout", async ()
 });
 
 test("invalid protocol lines remain diagnostic and server requests stay interactive", () => {
-  const client = new CodexAppServerClient();
+  const client = new CodexAppServerClient({ command: "bundled" });
   const diagnostics = [];
   const requests = [];
   client.on("diagnostic", (message) => diagnostics.push(message));
@@ -153,6 +155,7 @@ test("initialization identifies DSH and advertises only implemented capabilities
     "const input = readline.createInterface({ input: process.stdin })",
     "input.on('line', (line) => {",
     "  const message = JSON.parse(line)",
+    "  if (message.method === 'model/list') { process.stdout.write(JSON.stringify({ id: message.id, result: { data: [{ id: 'fixture-model' }] } }) + '\\n'); return }",
     "  if (message.method !== 'initialize') return",
     "  const capabilities = message.params.capabilities",
     "  if (message.params.clientInfo.name !== 'relay_codex') process.exit(8)",
@@ -201,8 +204,68 @@ test("initialization client identity and capabilities can be overridden", async 
   client.process = null;
 });
 
+test("an automatically discovered runtime with an unusable model list falls back to bundled", async () => {
+  const root = await mkdtemp(join(tmpdir(), "relay-codex-preflight-"));
+  let local;
+  let bundled;
+  try {
+    local = await writeExecutable(join(root, "local-codex"), fixtureSource("[]"));
+    bundled = await writeNodeScript(join(root, "bundled-codex.js"), fixtureSource("[{ id: 'gpt-6-fixture', isDefault: true }]"));
+    const diagnostics = [];
+    const client = new CodexAppServerClient({
+      env: { PATH: "" },
+      launchOptions: {
+        candidatePaths: [local],
+        resolvePackage: () => bundled,
+      },
+      requestTimeoutMs: 1_000,
+    });
+    client.on("diagnostic", (message) => diagnostics.push(message));
+
+    await client.start();
+    assert.equal(client.commandSource, "bundled");
+    assert.equal(client.runtimeInfo.modelCount, 1);
+    assert.match(diagnostics.join("\n"), /falling back to bundled runtime/);
+    assert.equal(client.initialModels.data[0].id, "gpt-6-fixture");
+    await client.close();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an explicitly configured runtime does not fall back after preflight failure", async () => {
+  const root = await mkdtemp(join(tmpdir(), "relay-codex-explicit-"));
+  try {
+    const local = await writeExecutable(join(root, "local-codex"), fixtureSource("[]"));
+    const client = new CodexAppServerClient({ command: local, requestTimeoutMs: 5_000 });
+    await assert.rejects(client.start(), (error) => error.code === "CODEX_MODEL_LIST_EMPTY");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("when both automatic and bundled runtimes fail, the final error keeps both causes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "relay-codex-both-fail-"));
+  try {
+    const local = await writeExecutable(join(root, "local-codex"), fixtureSource("[]"));
+    const bundled = await writeNodeScript(join(root, "bundled-codex.js"), fixtureSource("[]"));
+    const client = new CodexAppServerClient({
+      env: { PATH: "" },
+      launchOptions: { candidatePaths: [local], resolvePackage: () => bundled },
+      requestTimeoutMs: 1_000,
+    });
+    await assert.rejects(client.start(), (error) => {
+      assert.equal(error.code, "CODEX_MODEL_LIST_EMPTY");
+      assert.equal(error.cause?.code, "CODEX_MODEL_LIST_EMPTY");
+      return true;
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a closed App Server stdin rejects pending work without an unhandled stream error", async () => {
-  const client = new CodexAppServerClient({ requestTimeoutMs: 1_000 });
+  const client = new CodexAppServerClient({ command: "bundled", requestTimeoutMs: 1_000 });
   client.process = { stdin: { writable: true, write() {} } };
   const pending = client.request("model/list");
   const error = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
@@ -213,10 +276,40 @@ test("a closed App Server stdin rejects pending work without an unhandled stream
 });
 
 test("requests made while App Server is stopped carry an actionable stable code", async () => {
-  const client = new CodexAppServerClient();
+  const client = new CodexAppServerClient({ command: "bundled" });
   await assert.rejects(client.request("model/list"), (error) => {
     assert.equal(error.code, "CODEX_APP_SERVER_NOT_RUNNING");
     assert.match(error.message, /Restart DSH/);
     return true;
   });
 });
+
+async function writeExecutable(path, source) {
+  if (process.platform === "win32") {
+    const scriptPath = path + ".js";
+    const commandPath = path + ".cmd";
+    await writeFile(scriptPath, source);
+    await writeFile(commandPath, "@echo off\r\n\"" + process.execPath + "\" \"" + scriptPath + "\" %*\r\n");
+    return commandPath;
+  }
+  await writeFile(path, `#!/usr/bin/env node\n${source}\n`);
+  await chmod(path, 0o755);
+  return path;
+}
+
+async function writeNodeScript(path, source) {
+  await writeFile(path, source);
+  return path;
+}
+
+function fixtureSource(models) {
+  return [
+    "const readline = require('node:readline')",
+    "const input = readline.createInterface({ input: process.stdin })",
+    "input.on('line', (line) => {",
+    "  const message = JSON.parse(line)",
+    "  if (message.method === 'initialize') process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + '\\n')",
+    `  if (message.method === 'model/list') process.stdout.write(JSON.stringify({ id: message.id, result: { data: ${models} } }) + '\\n')`,
+    "})",
+  ].join("\n");
+}

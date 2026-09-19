@@ -9,10 +9,36 @@ This specification defines the user-visible and safety-critical behavior of
 
 The plugin Host process owns one Codex App Server child process. It starts the
 child while the DSH Host activates the plugin, before Codex models are used,
-and stops it when the plugin is disposed or DSH exits. The default launcher is
-the pinned `@openai/codex` package and its platform optional dependency. A
-global `codex` command is not required. `codexCommand` overrides
-`RELAY_CODEX_COMMAND`, which overrides the bundled launcher.
+and stops it when the plugin is disposed or DSH exits. The launcher selection
+policy is:
+
+1. A non-blank `codexCommand` value wins. It may be `auto`, `bundled`, or an
+   absolute executable path.
+2. Otherwise a non-blank `RELAY_CODEX_COMMAND` value wins with the same syntax.
+3. Otherwise the plugin uses `auto`: it checks known ChatGPT/Codex App paths
+   and PATH candidates in order, then uses the bundled runtime if no candidate
+   is valid.
+
+Every discovered or configured path is canonicalized and verified as an
+existing regular executable file. Empty values, directories, broken symlinks,
+and non-executable files are invalid candidates. The default launcher is the
+pinned `@openai/codex` package and its platform optional dependency. A global
+`codex` command is not required. An explicit invalid path fails with
+`CODEX_EXECUTABLE_NOT_FOUND` or `CODEX_EXECUTABLE_INVALID` and never silently
+falls back.
+
+Before a child is made available, the client completes `initialize` and a
+usable `model/list` response. If an automatically discovered local runtime
+fails either preflight step, the child is stopped and the bundled runtime is
+started once. Explicit paths and `bundled` do not use this fallback. A saved
+configuration may replace the selected runtime without restarting DSH, but the
+replacement must complete both preflight steps before it becomes active. A
+replacement waits for active Turns and interactive server requests to settle;
+if it fails, the previous runtime and model catalog remain active.
+
+The connected status exposes the actual runtime `source`, canonical `path`,
+and `modelCount`. The model list returned by the selected App Server is
+authoritative; the plugin does not hard-code or filter model ids.
 
 The default launcher disables Codex `features.shell_snapshot`. Shell commands still
 receive the effective Codex child environment; Relay does not turn secret delivery
@@ -49,7 +75,8 @@ The observable state machine is:
 | `rebind-required` | A DSH fork could not establish its App Server child binding safely. | Preserve provenance and retry Fork from the original Session after fixing the condition. |
 
 User-facing status must never expose raw `spawn codex ENOENT`. Stable error
-codes include `CODEX_EXECUTABLE_NOT_FOUND`, `CODEX_RUNTIME_MISSING`,
+codes include `CODEX_EXECUTABLE_NOT_FOUND`, `CODEX_EXECUTABLE_INVALID`,
+`CODEX_MODEL_LIST_INVALID`, `CODEX_MODEL_LIST_EMPTY`, `CODEX_RUNTIME_MISSING`,
 `CODEX_PLATFORM_UNSUPPORTED`, `CODEX_APP_SERVER_NOT_RUNNING`,
 `CODEX_APP_SERVER_CONNECTION_FAILED`, and `CODEX_REBIND_REQUIRED`.
 

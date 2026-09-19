@@ -27,18 +27,25 @@ export function startingCodexConnectionStatus(now = Date.now()) {
   });
 }
 
-export function connectedCodexConnectionStatus(now = Date.now()) {
+export function connectedCodexConnectionStatus(now = Date.now(), details = {}) {
   return Object.freeze({
     state: "connected",
     code: "CODEX_APP_SERVER_CONNECTED",
     message: "Codex App Server is connected.",
     action: null,
     changedAt: now,
+    ...details,
   });
 }
 
 export function codexConnectionFailure(error, now = Date.now()) {
   const code = typeof error?.code === "string" ? error.code : "CODEX_APP_SERVER_CONNECTION_FAILED";
+  if (code === "CODEX_EXECUTABLE_INVALID") {
+    return failure("unavailable", code,
+      "Codex could not start because the configured executable path is invalid.",
+      "Set codexCommand or RELAY_CODEX_COMMAND to an absolute executable file, or use auto/bundled.",
+      now);
+  }
   if (code === "CODEX_EXECUTABLE_NOT_FOUND") {
     return failure("unavailable", code,
       "Codex could not start because the configured executable was not found.",
@@ -61,6 +68,12 @@ export function codexConnectionFailure(error, now = Date.now()) {
     return failure("connection-failed", code,
       "Codex App Server is not running.",
       "Restart DSH. If the problem continues, inspect the Codex status in Settings and verify Codex authentication.",
+      now);
+  }
+  if (["CODEX_MODEL_LIST_INVALID", "CODEX_MODEL_LIST_EMPTY"].includes(code)) {
+    return failure("connection-failed", code,
+      "Codex App Server did not return a usable model list.",
+      "Restart DSH and verify the selected Codex runtime and authentication.",
       now);
   }
   return failure("connection-failed", code,

@@ -105,18 +105,21 @@ export class CodexAppServerClient extends EventEmitter {
     requestTimeoutMs = 30_000,
     clientInfo = NATIVE_CODEX_CLIENT_INFO,
     capabilities = NATIVE_CODEX_CAPABILITIES,
+    launchOptions = {},
   } = {}) {
     super();
-    const launch = resolveCodexLaunch({ command });
-    this.command = launch.command;
-    this.commandSource = launch.source;
+    this.launch = resolveCodexLaunch({ command, ...launchOptions });
+    this.command = this.launch.command;
+    this.commandSource = this.launch.source;
+    this.launchMode = this.launch.mode;
     this.appServerArgs = [...args];
     this.bypassHookTrust = args.includes(BYPASS_HOOK_TRUST_FLAG);
-    this.args = [...launch.argsPrefix, ...args];
+    this.args = [...this.launch.argsPrefix, ...args];
     this.requestTimeoutMs = requestTimeoutMs;
     this.clientInfo = structuredClone(clientInfo);
     this.capabilities = structuredClone(capabilities);
     this.process = null;
+    this.initialModels = null;
     this.nextRequestId = 1;
     this.pending = new Map();
     this.closed = false;
@@ -124,22 +127,50 @@ export class CodexAppServerClient extends EventEmitter {
 
   async start() {
     if (this.process) return;
+    try {
+      await this.startLaunch(this.launch);
+    } catch (error) {
+      if (this.closed || !this.launch.fallback) throw error;
+      this.emit(
+        "diagnostic",
+        `Automatic Codex runtime at ${this.launch.command} failed preflight: `
+        + `${error?.code ?? "ERROR"} ${error?.message ?? error}; falling back to bundled runtime.`,
+      );
+      await this.stopProcess();
+      this.launch = this.launch.fallback;
+      this.applyLaunch(this.launch);
+      try {
+        await this.startLaunch(this.launch);
+      } catch (fallbackError) {
+        fallbackError.cause ??= error;
+        throw fallbackError;
+      }
+    }
+  }
+
+  async startLaunch(launch) {
     this.closed = false;
-    this.process = spawn(this.command, this.args, {
+    this.applyLaunch(launch);
+    this.initialModels = null;
+    const child = spawn(this.command, this.args, {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      shell: process.platform === "win32" && /\.(?:bat|cmd)$/i.test(this.command),
     });
+    this.process = child;
 
-    const output = readline.createInterface({ input: this.process.stdout });
+    const output = readline.createInterface({ input: child.stdout });
     output.on("line", (line) => this.handleLine(line));
-    this.process.stderr.setEncoding("utf8");
-    this.process.stderr.on("data", (chunk) => this.emit("diagnostic", String(chunk)));
-    this.process.stdin.on("error", (error) => this.handleStdinError(error));
-    this.process.once("error", (error) => {
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => this.emit("diagnostic", String(chunk)));
+    child.stdin.on("error", (error) => this.handleStdinError(error));
+    child.once("error", (error) => {
+      if (this.process !== child) return;
       this.process = null;
       this.failAll(codexSpawnError(error, this.command, this.commandSource));
     });
-    this.process.once("exit", (code, signal) => {
+    child.once("exit", (code, signal) => {
+      if (this.process !== child) return;
       this.process = null;
       if (!this.closed) {
         this.failAll(new Error(`codex app-server exited (${signal ?? code})`));
@@ -147,11 +178,34 @@ export class CodexAppServerClient extends EventEmitter {
       this.emit("exit", { code, signal });
     });
 
-    await this.request("initialize", {
-      clientInfo: this.clientInfo,
-      capabilities: this.capabilities,
-    });
-    this.notify("initialized", {});
+    try {
+      await this.request("initialize", {
+        clientInfo: this.clientInfo,
+        capabilities: this.capabilities,
+      });
+      this.notify("initialized", {});
+      const models = await this.request("model/list", { limit: 50, includeHidden: false });
+      assertUsableModelList(models);
+      this.initialModels = structuredClone(models);
+    } catch (error) {
+      await this.stopProcess();
+      throw error;
+    }
+  }
+
+  applyLaunch(launch) {
+    this.command = launch.command;
+    this.commandSource = launch.source;
+    this.launchMode = launch.mode;
+    this.args = [...launch.argsPrefix, ...this.appServerArgs];
+  }
+
+  get runtimeInfo() {
+    return {
+      source: this.commandSource,
+      path: this.launch.argsPrefix[0] ?? this.command,
+      modelCount: Array.isArray(this.initialModels?.data) ? this.initialModels.data.length : 0,
+    };
   }
 
   request(method, params = {}, { timeoutMs = this.requestTimeoutMs } = {}) {
@@ -184,9 +238,14 @@ export class CodexAppServerClient extends EventEmitter {
   async close() {
     this.closed = true;
     this.failAll(new Error("codex app-server client closed"));
+    await this.stopProcess();
+  }
+
+  async stopProcess() {
     if (!this.process) return;
     const child = this.process;
     this.process = null;
+    this.failAll(new Error("codex app-server process stopped"));
     child.kill("SIGTERM");
     await new Promise((resolve) => {
       const timer = setTimeout(resolve, 1_000);
@@ -257,4 +316,17 @@ function appServerNotRunningError() {
   const error = new Error("Codex App Server is not running. Restart DSH and inspect the Codex status in Settings.");
   error.code = "CODEX_APP_SERVER_NOT_RUNNING";
   return error;
+}
+
+function assertUsableModelList(result) {
+  if (!Array.isArray(result?.data)) {
+    const error = new Error("Codex App Server returned an invalid model/list response.");
+    error.code = "CODEX_MODEL_LIST_INVALID";
+    throw error;
+  }
+  if (!result.data.some((model) => typeof model?.id === "string" && model.id.trim())) {
+    const error = new Error("Codex App Server returned no usable models.");
+    error.code = "CODEX_MODEL_LIST_EMPTY";
+    throw error;
+  }
 }
