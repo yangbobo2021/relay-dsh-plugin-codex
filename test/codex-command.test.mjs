@@ -28,6 +28,7 @@ test("auto candidates are tried in order and invalid candidates are skipped", ()
     "/good": { kind: "file" },
   });
   const launch = resolveCodexLaunch({
+    platform: "linux",
     candidatePaths: ["", "  ", null, "/bad", "/broken", "/not-executable", "/good"],
     fsApi,
     resolvePackage: fakePackageResolver,
@@ -56,6 +57,7 @@ test("explicit paths and environment paths override auto discovery", () => {
   const fsApi = fakeFs({ "/configured": { kind: "file" }, "/environment": { kind: "file" } });
   assert.equal(
     resolveCodexLaunch({
+      platform: "linux",
       command: "/configured",
       env: { RELAY_CODEX_COMMAND: "/environment" },
       candidatePaths: ["/auto"],
@@ -65,6 +67,7 @@ test("explicit paths and environment paths override auto discovery", () => {
   );
   assert.equal(
     resolveCodexLaunch({
+      platform: "linux",
       env: { RELAY_CODEX_COMMAND: "/environment" },
       candidatePaths: ["/auto"],
       fsApi,
@@ -75,21 +78,28 @@ test("explicit paths and environment paths override auto discovery", () => {
 
 test("auto and bundled are explicit supported modes", () => {
   const fsApi = fakeFs({ "/local": { kind: "file" } });
-  assert.equal(resolveCodexLaunch({ command: "auto", candidatePaths: ["/local"], fsApi }).source, "local");
+  assert.equal(resolveCodexLaunch({
+    platform: "linux",
+    arch: "x64",
+    command: "auto",
+    candidatePaths: ["/local"],
+    fsApi,
+    resolvePackage: fakePackageResolver,
+  }).source, "local");
   assert.equal(resolveCodexLaunch({ command: "bundled" }).source, "bundled");
 });
 
 test("explicit invalid paths fail instead of silently falling back", () => {
   assert.throws(
-    () => resolveCodexLaunch({ command: "/missing/codex", candidatePaths: [process.execPath] }),
+    () => resolveCodexLaunch({ platform: "linux", command: "/missing/codex", candidatePaths: [process.execPath] }),
     (error) => error.code === "CODEX_EXECUTABLE_NOT_FOUND",
   );
   assert.throws(
-    () => resolveCodexLaunch({ command: "relative/codex" }),
+    () => resolveCodexLaunch({ platform: "linux", command: "relative/codex" }),
     (error) => error.code === "CODEX_EXECUTABLE_INVALID" && /absolute/.test(error.message),
   );
   assert.throws(
-    () => resolveCodexLaunch({ command: "/directory", fsApi: fakeFs({ "/directory": { kind: "directory" } }) }),
+    () => resolveCodexLaunch({ platform: "linux", command: "/directory", fsApi: fakeFs({ "/directory": { kind: "directory" } }) }),
     (error) => error.code === "CODEX_EXECUTABLE_INVALID" && /regular file/.test(error.message),
   );
 });
