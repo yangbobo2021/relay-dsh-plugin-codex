@@ -228,6 +228,10 @@ Workspace 的 Thread 不可选择。标题和最后活动时间在打开 Session
 工具通过当前 Agent 的 DSH 工具运行时执行，并继续受到 DSH 权限和 Codex
 审批机制约束。
 
+在 enhanced 模式下，如果 DSH MCP 工具名以 Codex 保留的 `mcp__` 开头，插件会在
+注册时生成稳定的 `relay_mcp__` 别名，并在调用时映射回原始 DSH 工具名，因此不会
+丢失 MCP 能力。普通 DSH 工具名保持不变；native 模式仍不转发 DSH 工具。
+
 ## 可靠性与 App Server 生命周期
 
 Codex App Server 进程由 DSH Host 插件负责。插件激活时会启动一个子进程，并在

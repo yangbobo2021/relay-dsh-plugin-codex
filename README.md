@@ -247,6 +247,11 @@ manual refresh action.
 Tools execute through the owning Agent's DSH tool runtime and remain subject to
 DSH permissions and Codex approval behavior.
 
+DSH MCP tools whose names begin with Codex's reserved `mcp__` prefix receive a
+stable `relay_mcp__` wire alias during enhanced-mode registration. Calls are
+mapped back to the original DSH name, so the MCP capability remains available.
+Ordinary DSH tool names are unchanged; native mode continues to omit DSH tools.
+
 ## Reliability and App Server Lifecycle
 
 The DSH Host plugin owns the Codex App Server process. It starts one child while

@@ -1,6 +1,10 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+
+export const CODEX_RESERVED_DYNAMIC_TOOL_PREFIX = "mcp__";
+const DSH_MCP_TOOL_ALIAS_PREFIX = "relay_mcp__";
 
 export const CODEX_APP_DYNAMIC_TOOLS = [
   {
@@ -19,13 +23,18 @@ export const CODEX_APP_DYNAMIC_TOOLS = [
 ];
 
 export function codexDynamicTools(dshTools = [], builtins = CODEX_APP_DYNAMIC_TOOLS) {
+  return codexDshToolSurface(dshTools, builtins).dynamicTools;
+}
+
+export function codexDshToolSurface(dshTools = [], builtins = CODEX_APP_DYNAMIC_TOOLS) {
+  const bindings = codexDshToolBindings(dshTools);
   const tools = dshTools.map(tool => ({
     type: "function",
-    name: tool.name,
+    name: bindings.originalToAlias.get(String(tool.name)),
     description: tool.description,
     inputSchema: structuredClone(tool.parameters),
   }));
-  return tools.length === 0
+  const dynamicTools = tools.length === 0
     ? structuredClone(builtins)
     : [...structuredClone(builtins), {
         type: "namespace",
@@ -33,6 +42,39 @@ export function codexDynamicTools(dshTools = [], builtins = CODEX_APP_DYNAMIC_TO
         description: "Tools contributed to this conversation through the DSH plugin runtime.",
         tools,
       }];
+  return { dynamicTools, aliasToOriginal: bindings.aliasToOriginal };
+}
+
+export function codexDshToolBindings(dshTools = []) {
+  const aliasToOriginal = new Map();
+  const originalToAlias = new Map();
+  const usedAliases = new Set();
+
+  for (const tool of dshTools) {
+    const original = String(tool.name);
+    if (!original.startsWith(CODEX_RESERVED_DYNAMIC_TOOL_PREFIX)) {
+      aliasToOriginal.set(original, original);
+      originalToAlias.set(original, original);
+      usedAliases.add(original);
+    }
+  }
+
+  for (const tool of dshTools) {
+    const original = String(tool.name);
+    if (originalToAlias.has(original)) continue;
+    const base = `${DSH_MCP_TOOL_ALIAS_PREFIX}${original.slice(CODEX_RESERVED_DYNAMIC_TOOL_PREFIX.length)}`;
+    let alias = base;
+    if (usedAliases.has(alias)) {
+      const digest = createHash("sha256").update(original).digest("hex").slice(0, 10);
+      alias = `${base}__${digest}`;
+      let suffix = 2;
+      while (usedAliases.has(alias)) alias = `${base}__${digest}_${suffix++}`;
+    }
+    aliasToOriginal.set(alias, original);
+    originalToAlias.set(original, alias);
+    usedAliases.add(alias);
+  }
+  return { aliasToOriginal, originalToAlias };
 }
 
 export async function handleCodexServerRequest(ctx, { adapter, runtime, request }) {
@@ -88,7 +130,8 @@ async function handleDynamicTool(runtime, request, adapter, agent, sessionId) {
     return;
   }
   if (namespace === "dsh") {
-    if (!adapter.hasDshTool(sessionId, tool)) {
+    const originalTool = adapter.dshToolName(sessionId, tool);
+    if (!originalTool) {
       runtime.respondDynamicTool(request.id, false, `DSH tool ${tool} is not available for this DSH turn.`);
       return;
     }
@@ -98,7 +141,7 @@ async function handleDynamicTool(runtime, request, adapter, agent, sessionId) {
     signal.throwIfAborted();
     const result = await agent.ctx.tools.execute({
       callId: `codex:${request.id}`,
-      name: tool,
+      name: originalTool,
       arguments: requestedArguments(request.params),
       agent,
       signal,

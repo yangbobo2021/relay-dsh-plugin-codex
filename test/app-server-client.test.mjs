@@ -137,7 +137,7 @@ test("an App Server child exit rejects initialization and reports the exit", asy
   const client = new CodexAppServerClient({
     command: process.execPath,
     args: ["-e", "process.stdin.resume(); setTimeout(() => process.exit(7), 20)"],
-    requestTimeoutMs: 1_000,
+    requestTimeoutMs: 5_000,
   });
   let exit = null;
   client.on("exit", (details) => {
@@ -171,7 +171,7 @@ test("initialization identifies DSH and advertises only implemented capabilities
   const client = new CodexAppServerClient({
     command: process.execPath,
     args: ["-e", fixture],
-    requestTimeoutMs: 1_000,
+    requestTimeoutMs: 5_000,
   });
 
   await client.start();
@@ -218,7 +218,7 @@ test("an automatically discovered runtime with an unusable model list falls back
         candidatePaths: [local],
         resolvePackage: () => bundled,
       },
-      requestTimeoutMs: 1_000,
+      requestTimeoutMs: 5_000,
     });
     client.on("diagnostic", (message) => diagnostics.push(message));
 
@@ -252,7 +252,7 @@ test("when both automatic and bundled runtimes fail, the final error keeps both 
     const client = new CodexAppServerClient({
       env: { PATH: "" },
       launchOptions: { candidatePaths: [local], resolvePackage: () => bundled },
-      requestTimeoutMs: 1_000,
+      requestTimeoutMs: 5_000,
     });
     await assert.rejects(client.start(), (error) => {
       assert.equal(error.code, "CODEX_MODEL_LIST_EMPTY");

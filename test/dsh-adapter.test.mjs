@@ -1901,6 +1901,114 @@ test("Codex exposes and executes only the generic DSH tools assembled for the tu
   assert.match(interactions.dynamic.at(-1).text, /not available for this DSH turn/);
 });
 
+test("Codex aliases reserved DSH MCP tool names and routes calls to the original tool", async () => {
+  const calls = [];
+  const runtime = new FakeRuntime();
+  const agent = fakeAgent({
+    tools: {
+      async execute(input) {
+        calls.push(input);
+        return { isError: false, content: [{ type: "text", text: "MCP_ALIAS_OK_001" }] };
+      },
+    },
+  });
+  const adapter = new CodexDshAdapter({ runtime, ready: Promise.resolve() });
+  adapter.attachAgent(agent);
+  const originalName = "mcp__scholar-search__batch_get_papers";
+
+  await collect(adapter.stream({
+    provider: "relay-codex",
+    model: "codex-test",
+    sessionId: agent.id,
+    messages: [{ role: "user", source: { kind: "user" }, content: [{ type: "text", text: "use the MCP tool" }] }],
+    tools: [{
+      name: originalName,
+      description: "Return a deterministic MCP marker.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+    }],
+  }));
+
+  const dshNamespace = runtime.createdConfig.dynamicTools.find(tool => tool.type === "namespace" && tool.name === "dsh");
+  const alias = dshNamespace.tools[0].name;
+  assert.match(alias, /^relay_mcp__/);
+  assert.notEqual(alias, originalName);
+
+  const interactions = new InteractionRuntime();
+  for (const [id, method] of [["mcp-alias-1", "item/dynamicTool/call"], ["mcp-alias-2", "item/tool/call"]]) {
+    await handleCodexServerRequest({ agents: { get: id => id === agent.id ? agent : null } }, {
+      adapter,
+      runtime: interactions,
+      request: request(id, method, {
+        namespace: "dsh",
+        name: alias,
+        arguments: {},
+      }),
+    });
+  }
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map(call => call.name), [originalName, originalName]);
+  assert.deepEqual(interactions.dynamic.map(result => result.success), [true, true]);
+  assert.deepEqual(interactions.dynamic.map(result => result.text), ["MCP_ALIAS_OK_001", "MCP_ALIAS_OK_001"]);
+});
+
+test("refreshing a DSH MCP tool replaces its alias mapping without replacing the Codex Thread", async () => {
+  const runtime = new FakeRuntime();
+  const adapter = new CodexDshAdapter({ runtime, ready: Promise.resolve() });
+  const agent = fakeAgent();
+  adapter.attachAgent(agent);
+  const base = {
+    provider: "relay-codex",
+    model: "codex-test",
+    sessionId: agent.id,
+    messages: [{ role: "user", source: { kind: "user" }, content: [{ type: "text", text: "continue" }] }],
+  };
+  const originalName = "mcp__scholar-search__batch_get_papers";
+
+  await collect(adapter.stream(base));
+  await collect(adapter.stream({ ...base, tools: [{
+    name: originalName,
+    description: "A reserved MCP tool installed after the Thread was created.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+  }] }));
+
+  const alias = runtime.sessions.get("thread-1").dynamicTools.find(tool => tool.name === "dsh").tools[0].name;
+  assert.equal(runtime.created, 1);
+  assert.equal(runtime.resumed, 1);
+  assert.equal(adapter.dshToolName(agent.id, alias), originalName);
+  assert.match(alias, /^relay_mcp__/);
+});
+
+test("a failed DSH MCP tool refresh preserves the previous Thread mapping", async () => {
+  const runtime = new FailingResumeRuntime();
+  const adapter = new CodexDshAdapter({ runtime, ready: Promise.resolve() });
+  const agent = fakeAgent();
+  adapter.attachAgent(agent);
+  const originalName = "mcp__scholar-search__batch_get_papers";
+  const base = {
+    provider: "relay-codex",
+    model: "codex-test",
+    sessionId: agent.id,
+    messages: [{ role: "user", source: { kind: "user" }, content: [{ type: "text", text: "continue" }] }],
+  };
+
+  await collect(adapter.stream({ ...base, tools: [{
+    name: originalName,
+    description: "The original MCP tool.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+  }] }));
+  const oldAlias = runtime.createdConfig.dynamicTools.find(tool => tool.name === "dsh").tools[0].name;
+
+  await assert.rejects(collect(adapter.stream({ ...base, tools: [{
+    name: "mcp__other-server__new_tool",
+    description: "A replacement MCP tool.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+  }] })), /thread already has an active writer/);
+
+  assert.equal(adapter.dshToolName(agent.id, oldAlias), originalName);
+  assert.equal(adapter.dshToolName(agent.id, "relay_mcp__new_tool"), undefined);
+});
+
 test("subagent activity routes descendant interactions only while the owning root Turn is live", async () => {
   const calls = [];
   const runtime = new SubagentActivityRuntime();
@@ -2146,7 +2254,7 @@ test("cancelled DSH dynamic tools receive the turn signal and cannot send a late
   const agent = fakeAgent();
   adapter.attachAgent(agent);
   await adapter.ensureThread(agent.id);
-  adapter.dshToolNames.set(agent.id, new Set(["wait_fixture"]));
+  adapter.dshToolNames.set(agent.id, new Map([["wait_fixture", "wait_fixture"]]));
   const controller = new AbortController();
   adapter.activeTurnSignals.set("thread-1", controller.signal);
   const started = Promise.withResolvers();
