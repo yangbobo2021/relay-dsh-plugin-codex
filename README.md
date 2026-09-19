@@ -1,11 +1,11 @@
 # Codex Conversations for DeepSeek Harness
 
-> **Stable `0.2.3` is verified on official DSH `0.1.5-rc.2` and `0.1.6-alpha.1`.** It accepts both durable and live Assistant streams, both persistence read response shapes, and the settlement metadata required by the newer DSH contract; its peer metadata declares both exact releases. [Install it from npm](https://www.npmjs.com/package/relay-dsh-plugin-codex) · [Compatibility evidence](https://github.com/yangbobo2021/Relay/tree/codex/relay-foundation/dsh-lab/dsh-0.1.6-alpha.1-20260915).
+> **Stable `0.2.4` is verified on official DSH `0.1.5-rc.2` and `0.1.6-alpha.1`.** It refreshes Codex models after runtime changes and keeps enhanced mode usable when DSH contributes `mcp__`-prefixed tools, while preserving the compatibility guarantees from `0.2.3`. [Install it from npm](https://www.npmjs.com/package/relay-dsh-plugin-codex) · [Compatibility evidence](https://github.com/yangbobo2021/relay-dsh-plugin-codex/blob/main/validation/migration-compatibility/runs/2026-09-19_0.1.2-rc.1_76fda72_live_macos-arm64_ext017/results.md).
 
-> **Release channels:** `latest` → `0.2.3`; `next` → `0.2.4-rc.1`.
+> **Release channels:** `latest` → `0.2.4`; `next` → `0.2.4-rc.1`.
 
 ```bash
-npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add relay-dsh-plugin-codex@next
+npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add relay-dsh-plugin-codex@latest
 npx @deepseek-ai/dsh@0.1.6-alpha.1 web
 ```
 
@@ -15,7 +15,7 @@ npx @deepseek-ai/dsh@0.1.6-alpha.1 web
 [![GitHub stars](https://img.shields.io/github/stars/yangbobo2021/relay-dsh-plugin-codex?style=flat)](https://github.com/yangbobo2021/relay-dsh-plugin-codex/stargazers)
 [![MIT license](https://img.shields.io/github/license/yangbobo2021/relay-dsh-plugin-codex)](LICENSE)
 [![DSH compatibility](https://img.shields.io/badge/DSH-0.1.1--rc.2%20%7C%200.1.2--alpha.2%20%7C%200.1.2--alpha.3-2f7d68)](https://github.com/deepseek-ai/deepseek-harness)
-[![npm provenance](https://img.shields.io/badge/npm_provenance-verified-2f9e44)](https://www.npmjs.com/package/relay-dsh-plugin-codex/v/0.2.2)
+[![npm provenance](https://img.shields.io/badge/npm_provenance-verified-2f9e44)](https://www.npmjs.com/package/relay-dsh-plugin-codex/v/0.2.4)
 
 English | [中文](README.zh.md)
 
@@ -131,7 +131,7 @@ Use `@latest` to install the current stable release:
 npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add relay-dsh-plugin-codex@latest
 ```
 
-At the time of writing, `latest` resolves to stable version `0.2.2`. The linked
+At the time of writing, `latest` resolves to stable version `0.2.4`. The linked
 npm page is the source of truth for the current version.
 
 #### npm prerelease (recommended during DSH preview)
@@ -145,7 +145,7 @@ on a global `codex` executable:
 npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add relay-dsh-plugin-codex@next
 ```
 
-The `next` tag points to `0.2.4-rc.1`; `latest` points to `0.2.2`.
+The `next` tag points to `0.2.4-rc.1`; `latest` points to `0.2.4`.
 Check the npm registry for the currently published dist-tag before installing.
 
 This prerelease preserves native service-tier and resumed-thread settings, stops
@@ -156,7 +156,7 @@ to compare without DSH dynamic tools and guidance. The default mode is `enhanced
 The host identifies itself as DSH and does not advertise unimplemented Desktop
 attestation or MCP App HTML rendering. Dependency discovery reports existing paths.
 
-The bundled runtime remains `@openai/codex@0.149.0`; Desktop's experimental binary
+The bundled runtime is `@openai/codex@0.155.1`; Desktop's experimental binary
 is not redistributed or required. This is not complete Desktop parity. Known
 limitations include occasional empty native command-event output even when the
 model received the error, and a macOS locale issue affecting tools such as
@@ -175,7 +175,7 @@ npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add github:yangbobo2021/
 full Commit SHA instead. For example:
 
 ```bash
-npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add github:yangbobo2021/relay-dsh-plugin-codex#v0.2.4-rc.1
+npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add github:yangbobo2021/relay-dsh-plugin-codex#v0.2.4
 ```
 
 The official DSH CLI initializes the `web` Profile if it does not exist, asks
@@ -445,10 +445,10 @@ Report bugs and feature requests in this repository's
 
 ### Published stable installation
 
-Stable `0.2.3` additionally supports official DSH `0.1.5-rc.2` and `0.1.6-alpha.1`; install it from npm `latest` or Git tag `v0.2.3`.
+Stable `0.2.4` supports official DSH `0.1.5-rc.2` and `0.1.6-alpha.1`; install it from npm `latest` or Git tag `v0.2.4`.
 
 ```sh
-npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add relay-dsh-plugin-codex@next
+npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add relay-dsh-plugin-codex@latest
 # Git tag alternative, after publication:
-npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add github:yangbobo2021/relay-dsh-plugin-codex#v0.2.3
+npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add github:yangbobo2021/relay-dsh-plugin-codex#v0.2.4
 ```
