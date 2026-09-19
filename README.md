@@ -94,9 +94,11 @@ here.
 ### 1. Prepare Codex authentication
 
 The plugin installs a pinned official `@openai/codex` runtime and launches it in
-App Server mode. The runtime contains native binaries for macOS, Windows, and
-Linux on x64 and arm64, so DSH does not need to find a `codex` command on its
-`PATH`.
+App Server mode. By default, DSH first probes the local ChatGPT/Codex App
+executable and PATH candidates, then falls back to the bundled official
+`@openai/codex` runtime. The bundled runtime contains native binaries for
+macOS, Windows, and Linux on x64 and arm64, so DSH does not require a global
+`codex` command.
 
 Codex authentication is still required. Install or open an official Codex
 client and authenticate it before starting your first DSH Codex session. When
@@ -248,9 +250,31 @@ DSH permissions and Codex approval behavior.
 ## Reliability and App Server Lifecycle
 
 The DSH Host plugin owns the Codex App Server process. It starts one child while
-the plugin activates, before Codex model discovery, and stops it when DSH or the
-plugin shuts down. The default child comes from the pinned `@openai/codex`
-dependency, so a global `codex` command is not required.
+the plugin activates, performs `initialize` and `model/list` preflight before
+model discovery, and stops it when DSH or the plugin shuts down. The default
+selection is `auto`: valid local ChatGPT/Codex App paths are tried in order,
+then the bundled official `@openai/codex` runtime is used. A local runtime that
+fails preflight is stopped and retried once with bundled. A saved runtime
+setting can replace the active runtime without restarting DSH; the replacement
+must pass preflight before it is made active, and an active Turn is allowed to
+finish first.
+
+The runtime can be configured in **Settings → Plugins → Plugin configuration →
+Codex runtime**. Choose **Automatic discovery**, **Bundled `@openai/codex`**, or
+**Custom executable**, then save. The active runtime is replaced and the model
+list refreshes without restarting DSH. The same setting is available
+as the `codexCommand` bundle property for managed deployments.
+
+The `codexCommand` setting has priority over `RELAY_CODEX_COMMAND`. Either may
+be `auto`, `bundled`, or an absolute executable path. Empty values are ignored;
+explicit paths are canonicalized and must be existing regular executable files.
+An explicitly invalid path fails with a clear error and does not silently fall
+back. A failed replacement leaves the previous runtime and model list active.
+
+Settings diagnostics include the actual runtime source (`local` or `bundled`),
+canonical path, and model count. The selected App Server's `model/list` result
+is authoritative, so newly available model ids are retained without a plugin
+allowlist.
 
 Open **Settings → Advanced** to see whether Codex is **Connected**, **Not
 started**, **Starting**, **Connection failed**, or **Codex unavailable**. A
@@ -283,16 +307,17 @@ structured-question composition is defined by the
 
 This repository was designed and compatibility-tested in
 [Relay](https://github.com/yangbobo2021/Relay), an open-source project for
-long-running agent work, external-event delivery, reusable DSH workbench views,
-and multiple conversation backends.
+long-running agent work, external-event delivery, and multiple conversation
+backends.
 
 The plugin is independently installable. Its only Relay package dependency is
 the provider-neutral session import hub, which the package manager installs
 automatically. It has no runtime dependency on the Relay application, Relay
 Events, or another feature plugin. It does not replace the official DSH layout
-or install Files and Terminal views. This separation lets a user install only
-Codex while the broader Relay project can compose Codex, Claude, events, waits,
-monitors, and workbench extensions when those capabilities are needed.
+or install workspace UI replacements. Workbench, Files, and Terminal are retired;
+current DSH provides those capabilities officially. This separation lets a user
+install only Codex while the broader Relay project composes Codex, Claude,
+events, waits, and monitors when those capabilities are needed.
 
 Explore or star Relay to follow that broader work:
 <https://github.com/yangbobo2021/Relay>.
@@ -326,8 +351,9 @@ installation command and read its final error.
 ### The first message reports an authentication or executable error
 
 Run `codex login` with an official Codex client under the same operating-system
-user that starts DSH, then restart DSH. The plugin normally uses its bundled
-official `@openai/codex` runtime and does not depend on `PATH`.
+user that starts DSH, then restart DSH. The plugin normally probes the local
+ChatGPT/Codex App first and uses its bundled official `@openai/codex` runtime
+when local discovery or preflight is unavailable.
 
 If the error says the bundled runtime is missing, update or reinstall the plugin
 so the package manager restores the platform-specific optional dependency. A
@@ -345,14 +371,19 @@ dsh web
 ```
 
 The DSH bundle configuration property `codexCommand` has higher priority than
-`RELAY_CODEX_COMMAND`. Prefer an absolute native executable path; leaving both
-unset selects the bundled, plugin-tested Codex version.
+`RELAY_CODEX_COMMAND`. Use `auto` to request discovery, `bundled` to force the
+plugin-tested runtime, or an absolute native executable path to select one
+explicitly. Leaving both unset uses `auto`. A local discovery failure may fall
+back to bundled; an explicitly invalid path does not.
 
 If Settings shows `CODEX_EXECUTABLE_NOT_FOUND`, remove an invalid
 `codexCommand`/`RELAY_CODEX_COMMAND` override or replace it with an absolute
-path. `CODEX_RUNTIME_MISSING` means the platform optional dependency must be
-restored by reinstalling the plugin. **Connection failed** instead means the
-executable was found but App Server initialization or its process failed.
+path. `CODEX_EXECUTABLE_INVALID` means the configured path is not an absolute,
+regular executable file. `CODEX_RUNTIME_MISSING` means the platform optional
+dependency must be restored by reinstalling the plugin. `CODEX_MODEL_LIST_EMPTY`
+or `CODEX_MODEL_LIST_INVALID` means the selected App Server did not expose a
+usable model catalog. **Connection failed** instead means App Server
+initialization or its process failed.
 
 ### A forked Session says Rebind required
 

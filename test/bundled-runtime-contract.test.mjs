@@ -17,7 +17,7 @@ test("bundled runtime supports session settings and background inventory without
     import assert from "node:assert/strict";
     import { CodexAppServerClient } from ${JSON.stringify(clientUrl)};
     import { CodexSessionRuntime } from ${JSON.stringify(runtimeUrl)};
-    const client = new CodexAppServerClient({ requestTimeoutMs: 15_000 });
+    const client = new CodexAppServerClient({ command: "bundled", requestTimeoutMs: 15_000 });
     const diagnostics = [];
     client.on("diagnostic", message => diagnostics.push(message));
     assert.equal(client.commandSource, "bundled");

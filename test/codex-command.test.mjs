@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 
@@ -7,33 +10,103 @@ import { resolveCodexLaunch } from "../codex-command.mjs";
 
 const execFileAsync = promisify(execFile);
 
-test("bundled Codex is the PATH-independent default", () => {
-  const launch = resolveCodexLaunch({ env: { PATH: "" } });
+test("default auto mode discovers and validates a local executable before bundled fallback", () => {
+  const launch = resolveCodexLaunch({
+    env: { PATH: "" },
+    candidatePaths: [process.execPath],
+  });
   assert.equal(launch.command, process.execPath);
-  assert.equal(launch.source, "bundled");
-  assert.match(launch.argsPrefix[0], /@openai[/\\]codex[/\\]bin[/\\]codex\.js$/);
+  assert.equal(launch.source, "local");
+  assert.equal(launch.mode, "auto");
+  assert.equal(launch.fallback.source, "bundled");
 });
 
-test("explicit configuration overrides environment and the bundled runtime", () => {
-  assert.deepEqual(
-    resolveCodexLaunch({ command: "/configured/codex", env: { RELAY_CODEX_COMMAND: "/environment/codex" } }),
-    { command: "/configured/codex", argsPrefix: [], source: "config" },
+test("auto candidates are tried in order and invalid candidates are skipped", () => {
+  const fsApi = fakeFs({
+    "/bad": { kind: "directory" },
+    "/not-executable": { kind: "file", accessError: true },
+    "/good": { kind: "file" },
+  });
+  const launch = resolveCodexLaunch({
+    candidatePaths: ["", "  ", null, "/bad", "/broken", "/not-executable", "/good"],
+    fsApi,
+    resolvePackage: fakePackageResolver,
+  });
+  assert.equal(launch.command, "/good");
+  assert.deepEqual(launch.fallback, {
+    command: process.execPath,
+    argsPrefix: ["/bundled/codex.js"],
+    source: "bundled",
+    mode: "bundled",
+  });
+});
+
+test("empty, whitespace, and null configuration values leave auto mode enabled", () => {
+  for (const command of ["", "  ", null]) {
+    const launch = resolveCodexLaunch({
+      command,
+      env: { RELAY_CODEX_COMMAND: " ", PATH: "" },
+      candidatePaths: [process.execPath],
+    });
+    assert.equal(launch.source, "local");
+  }
+});
+
+test("explicit paths and environment paths override auto discovery", () => {
+  const fsApi = fakeFs({ "/configured": { kind: "file" }, "/environment": { kind: "file" } });
+  assert.equal(
+    resolveCodexLaunch({
+      command: "/configured",
+      env: { RELAY_CODEX_COMMAND: "/environment" },
+      candidatePaths: ["/auto"],
+      fsApi,
+    }).source,
+    "config",
   );
-  assert.deepEqual(
-    resolveCodexLaunch({ env: { RELAY_CODEX_COMMAND: "/environment/codex" } }),
-    { command: "/environment/codex", argsPrefix: [], source: "environment" },
+  assert.equal(
+    resolveCodexLaunch({
+      env: { RELAY_CODEX_COMMAND: "/environment" },
+      candidatePaths: ["/auto"],
+      fsApi,
+    }).source,
+    "environment",
   );
 });
 
-test("configured executable paths with spaces stay one spawn argument on every platform", () => {
-  assert.deepEqual(
-    resolveCodexLaunch({ command: "C:\\Program Files\\OpenAI\\codex.exe", platform: "win32" }),
-    { command: "C:\\Program Files\\OpenAI\\codex.exe", argsPrefix: [], source: "config" },
+test("auto and bundled are explicit supported modes", () => {
+  const fsApi = fakeFs({ "/local": { kind: "file" } });
+  assert.equal(resolveCodexLaunch({ command: "auto", candidatePaths: ["/local"], fsApi }).source, "local");
+  assert.equal(resolveCodexLaunch({ command: "bundled" }).source, "bundled");
+});
+
+test("explicit invalid paths fail instead of silently falling back", () => {
+  assert.throws(
+    () => resolveCodexLaunch({ command: "/missing/codex", candidatePaths: [process.execPath] }),
+    (error) => error.code === "CODEX_EXECUTABLE_NOT_FOUND",
   );
-  assert.deepEqual(
-    resolveCodexLaunch({ command: "/Applications/Codex Tools/codex", platform: "darwin" }),
-    { command: "/Applications/Codex Tools/codex", argsPrefix: [], source: "config" },
+  assert.throws(
+    () => resolveCodexLaunch({ command: "relative/codex" }),
+    (error) => error.code === "CODEX_EXECUTABLE_INVALID" && /absolute/.test(error.message),
   );
+  assert.throws(
+    () => resolveCodexLaunch({ command: "/directory", fsApi: fakeFs({ "/directory": { kind: "directory" } }) }),
+    (error) => error.code === "CODEX_EXECUTABLE_INVALID" && /regular file/.test(error.message),
+  );
+});
+
+test("paths with spaces stay one spawn argument and are canonicalized", async () => {
+  const root = await mkdtemp(join(tmpdir(), "relay codex "));
+  const executable = join(root, "Codex Tools", "codex");
+  try {
+    await mkdir(join(root, "Codex Tools"));
+    await writeFile(executable, "#!/bin/sh\nexit 0\n");
+    await chmod(executable, 0o755);
+    const launch = resolveCodexLaunch({ command: executable });
+    assert.match(launch.command, /relay codex .*Codex Tools[\\/]codex$/);
+    assert.deepEqual(launch.argsPrefix, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("bundled package resolution covers macOS, Windows, and Linux on x64 and arm64", () => {
@@ -48,6 +121,7 @@ test("bundled package resolution covers macOS, Windows, and Linux on x64 and arm
   for (const [platform, arch, platformPackage] of targets) {
     const resolved = [];
     const launch = resolveCodexLaunch({
+      command: "bundled",
       platform,
       arch,
       execPath: platform === "win32" ? "C:\\Program Files\\nodejs\\node.exe" : "/opt/node with spaces/node",
@@ -66,34 +140,20 @@ test("bundled package resolution covers macOS, Windows, and Linux on x64 and arm
 
 test("a missing bundled runtime has an actionable error", () => {
   assert.throws(
-    () => resolveCodexLaunch({ resolvePackage() { throw new Error("missing"); } }),
+    () => resolveCodexLaunch({ command: "bundled", resolvePackage() { throw new Error("missing"); } }),
     (error) => error.code === "CODEX_RUNTIME_MISSING" && /RELAY_CODEX_COMMAND/.test(error.message),
-  );
-});
-
-test("a missing platform package is detected before App Server spawn", () => {
-  assert.throws(
-    () => resolveCodexLaunch({
-      platform: "win32",
-      arch: "x64",
-      resolvePackage(specifier) {
-        if (specifier === "@openai/codex/bin/codex.js") return "C:\\relay\\codex.js";
-        throw new Error(`missing ${specifier}`);
-      },
-    }),
-    (error) => error.code === "CODEX_RUNTIME_MISSING" && /win32\/x64/.test(error.message),
   );
 });
 
 test("unsupported architectures require an explicit compatible command", () => {
   assert.throws(
-    () => resolveCodexLaunch({ platform: "linux", arch: "riscv64" }),
+    () => resolveCodexLaunch({ command: "bundled", platform: "linux", arch: "riscv64" }),
     (error) => error.code === "CODEX_PLATFORM_UNSUPPORTED" && /RELAY_CODEX_COMMAND/.test(error.message),
   );
 });
 
 test("the bundled platform binary runs with an empty PATH", async () => {
-  const launch = resolveCodexLaunch({ env: { PATH: "" } });
+  const launch = resolveCodexLaunch({ command: "bundled", env: { PATH: "" } });
   const { stdout } = await execFileAsync(launch.command, [...launch.argsPrefix, "--version"], {
     env: { ...process.env, PATH: "" },
     windowsHide: true,
@@ -115,3 +175,25 @@ test("the pinned Codex package covers supported desktop targets", async () => {
     ],
   );
 });
+
+function fakeFs(entries) {
+  return {
+    realpathSync(path) {
+      if (!entries[path]) throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      return path;
+    },
+    statSync(path) {
+      if (entries[path]?.kind !== "file") return { isFile: () => false };
+      return { isFile: () => true };
+    },
+    accessSync(path) {
+      if (entries[path]?.accessError) throw new Error("EACCES");
+    },
+  };
+}
+
+function fakePackageResolver(specifier) {
+  return specifier === "@openai/codex/bin/codex.js"
+    ? "/bundled/codex.js"
+    : `/packages/${specifier}/package.json`;
+}

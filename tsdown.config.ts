@@ -16,6 +16,8 @@ const EXTERNALS = new Set([
   'react-dom/client',
   '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-client-store',
+  '@deepseek-ai/dsh-client-ui-settings',
+  '@deepseek-ai/dsh-client-ui-settings-plugins',
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-ui-primitives',
 ])

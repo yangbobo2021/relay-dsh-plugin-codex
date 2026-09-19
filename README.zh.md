@@ -92,8 +92,10 @@ DSH 当前仍是开发者预览版本，可能发生不兼容修改。本仓库�
 ### 1. 准备 Codex 认证
 
 插件会安装一个固定版本的官方 `@openai/codex` 运行时，并以 App Server 模式
-启动它。该运行时包含 macOS、Windows、Linux 的 x64 和 arm64 原生二进制，
-因此 DSH 不需要从自身的 `PATH` 中寻找 `codex` 命令。
+启动它。默认会先按顺序探测本机 ChatGPT/Codex App 的可执行文件和 PATH，
+探测不到或预检失败时再回退到随插件安装的官方 `@openai/codex` 运行时。该
+打包运行时包含 macOS、Windows、Linux 的 x64 和 arm64 原生二进制，因此 DSH
+不要求系统全局存在 `codex` 命令。
 
 Codex 仍然需要认证。首次创建 DSH Codex 会话前，请安装或打开任一官方 Codex
 客户端并完成登录。使用 CLI 时，可以通过以下命令检查共享的本地认证状态：
@@ -228,9 +230,25 @@ Workspace 的 Thread 不可选择。标题和最后活动时间在打开 Session
 
 ## 可靠性与 App Server 生命周期
 
-Codex App Server 进程由 DSH Host 插件负责。插件激活时、Codex 模型发现之前，
-Host 会启动一个子进程；DSH 或插件退出时会停止它。默认子进程来自锁定版本的
-`@openai/codex` 依赖，因此不要求系统中存在全局 `codex` 命令。
+Codex App Server 进程由 DSH Host 插件负责。插件激活时会启动一个子进程，并在
+模型发现前完成 `initialize` 和 `model/list` 预检；DSH 或插件退出时会停止它。
+默认策略是 `auto`：依次验证本机 ChatGPT/Codex App 路径，失败后使用随插件
+安装的官方 `@openai/codex` 运行时。本机运行时预检失败时只回退一次 bundled。
+保存运行时配置后可以在不重启 DSH 的情况下替换当前 App Server；候选运行时必须先
+通过预检，正在进行的 Turn 会先完成。
+
+运行时可以在 **设置 → 插件 → 插件配置 → Codex 运行时** 中配置。可选择
+**自动探测**、**随插件打包的 `@openai/codex`** 或 **自定义可执行文件**，保存后
+会立即切换运行时并刷新模型列表。受管部署也可以使用 Bundle 配置项 `codexCommand`。
+
+`codexCommand` 配置优先于 `RELAY_CODEX_COMMAND`。两者都支持 `auto`、`bundled`
+和绝对可执行文件路径。空值会被忽略；显式路径必须是真实存在的普通可执行文件，
+并会先 canonicalize。显式路径错误时会明确失败，不会静默回退。修改配置后必须
+保存后会立即应用；如果候选运行时启动失败，旧运行时会继续提供服务。
+
+Settings 诊断会显示实际 runtime 的 source（`local` 或 `bundled`）、canonical
+路径和模型数量。模型列表以选中 App Server 的 `model/list` 返回为准，不使用插件
+内置白名单，因此新模型不会被硬编码过滤。
 
 打开 **Settings → Advanced** 可以查看 Codex 是 **已连接**、**未启动**、
 **正在启动**、**连接失败** 还是 **Codex 不可用**。如果 fork 子 Session 继承了
@@ -257,14 +275,14 @@ Codex Thread、Turn、Item、request 和绑定代次；任何不匹配都会拒�
 ## 插件边界及与 Relay 的关系
 
 本仓库在 [Relay](https://github.com/yangbobo2021/Relay) 项目中完成设计与
-兼容性验证。Relay 是面向长时间运行 Agent、外部事件投递、可复用 DSH
-工作台视图和多种对话后端的开源项目。
+兼容性验证。Relay 是面向长时间运行 Agent、外部事件投递和多种对话后端的
+开源项目。
 
 本插件可以独立安装。唯一依赖的 Relay 包是由包管理器自动安装的中立“会话
 导入中心”；运行时不依赖 Relay 应用、Relay Events 或其他功能插件，也不会
-替换 DSH 官方布局或安装 Files、Terminal 视图。用户可以只安装 Codex；需要
-时，Relay 项目则可以进一步组合 Codex、Claude、事件、Wait、Monitor 和工作台
-扩展。
+替换 DSH 官方工作区 UI。Workbench、Files、Terminal 已退役，当前 DSH 直接
+提供这些能力。用户可以只安装 Codex；需要时，Relay 项目可以进一步组合
+Codex、Claude、事件、Wait 和 Monitor。
 
 可以访问或 Star Relay 仓库，关注这些更完整的工作：
 <https://github.com/yangbobo2021/Relay>。
@@ -298,8 +316,8 @@ relay-dsh-plugin-codex`。如果 pnpm 找不到插件，请重新执行 npm 安�
 ### 第一条消息提示认证失败或找不到可执行文件
 
 请使用官方 Codex 客户端，以启动 DSH 的同一个操作系统用户执行 `codex
-login`，然后重启 DSH。插件默认使用随插件安装的官方 `@openai/codex` 运行时，
-不依赖 `PATH`。
+login`，然后重启 DSH。插件默认先探测本机 ChatGPT/Codex App，探测或预检失败时
+使用随插件安装的官方 `@openai/codex` 运行时。
 
 如果错误提示随包运行时缺失，请更新或重新安装插件，让包管理器恢复当前平台
 对应的 optional dependency。受管部署也可以明确指定其他 Codex 原生可执行文件：
@@ -315,9 +333,10 @@ $env:RELAY_CODEX_COMMAND = 'C:\absolute\path\to\codex.exe'
 dsh web
 ```
 
-DSH Bundle 配置项 `codexCommand` 的优先级高于 `RELAY_CODEX_COMMAND`。建议填写
-原生可执行文件的绝对路径；两者都不设置时，会使用随插件发布并完成兼容性验证
-的 Codex 版本。
+DSH Bundle 配置项 `codexCommand` 的优先级高于 `RELAY_CODEX_COMMAND`。使用 `auto`
+启用探测，使用 `bundled` 强制随插件发布并完成兼容性验证的 Codex 版本，也可以
+填写原生可执行文件的绝对路径。两者都不设置时使用 `auto`。自动探测失败可以
+回退 bundled，但显式错误路径不会回退。
 
 ### 与桌面 Codex 对照执行
 
@@ -362,9 +381,11 @@ profile 中指定参照程序；这不会自动升级默认捆绑运行时，也
 
 如果 Settings 显示 `CODEX_EXECUTABLE_NOT_FOUND`，请删除错误的
 `codexCommand`/`RELAY_CODEX_COMMAND` 覆盖，或改为绝对路径。
+`CODEX_EXECUTABLE_INVALID` 表示配置路径不是绝对路径、普通文件或可执行文件。
 `CODEX_RUNTIME_MISSING` 表示需要重新安装插件以恢复当前平台的 optional
-dependency。**连接失败** 则表示已经找到可执行文件，但 App Server 初始化或
-子进程运行失败。
+dependency。`CODEX_MODEL_LIST_EMPTY` 或 `CODEX_MODEL_LIST_INVALID` 表示选中的
+App Server 没有返回可用模型目录。**连接失败** 则表示 App Server 初始化或子进程
+运行失败。
 
 ### fork 子 Session 显示“需要重新绑定”
 

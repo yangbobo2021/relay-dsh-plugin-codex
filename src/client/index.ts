@@ -3,6 +3,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type { ChatNodeOwnerProps } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { SidebarFooterActionOwnerProps } from '@deepseek-ai/dsh-client-ui-sidebar/client'
+import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { AdvancedDebugPreference } from '../../advanced-debug-preference.mjs'
 import { installModelSelection, type ModelSelectionContext } from '../../model-selection.mjs'
 import {
@@ -26,6 +27,8 @@ import {
 } from './workspace-import-client.mjs'
 import { observeSessionOpen, syncOpenedCodexSessionAndRefresh } from './session-open-sync.mjs'
 import { conversationEvents, withConversationRuntime } from './compatible-runtime.ts'
+import { CodexCard } from './CodexCard.tsx'
+import { CODEX_SETTINGS_NAMESPACE, CodexCardController } from './codex-card-controller.ts'
 
 type DshSlotContractAnchors =
   | ChatNodeOwnerProps
@@ -41,18 +44,29 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
 }
 
-export const inject = ['slots', 'theme', 'locale', 'sessions', 'workspaces', 'connection']
+export const inject = ['slots', 'theme', 'locale', 'sessions', 'workspaces', 'connection', 'settingsScope']
 
 export function apply(ctx: ClientContext): () => void {
   const advancedDebug = applyAdvancedDebug(ctx)
   applyWorkspaceImport(ctx)
   applySessionOpenSync(ctx)
   applyConnectionStatus(ctx)
+  applyRuntimeSettings(ctx)
   return withConversationRuntime(ctx, inner => {
     applyActivityPresentation(inner)
     installProcessPresentation(inner, advancedDebug)
     return installModelSelection(inner as ModelSelectionContext, 'relay-codex', 'relay-codex', 'relay-claude')
   })
+}
+
+function applyRuntimeSettings(ctx: ClientContext): void {
+  const card = new CodexCardController(ctx.settingsScope.bind({ namespace: CODEX_SETTINGS_NAMESPACE }))
+  ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
+    name: 'settings.plugin.item',
+    key: CODEX_SETTINGS_NAMESPACE,
+    locale: 'relay.codex',
+    inject: () => card.inject(),
+  }, CodexCard))
 }
 
 function applyActivityPresentation(ctx: ClientContext): void {

@@ -32,6 +32,32 @@ test("executable and bundled runtime failures are actionable without raw spawn e
     assert.equal(status.code, code);
     assert.match(status.action, /RELAY_CODEX_COMMAND/);
   }
+
+  const invalid = codexConnectionFailure(Object.assign(new Error("invalid"), {
+    code: "CODEX_EXECUTABLE_INVALID",
+  }), 1);
+  assert.equal(invalid.state, "unavailable");
+  assert.match(invalid.action, /absolute executable file/);
+});
+
+test("model preflight failures remain actionable connection failures", () => {
+  for (const code of ["CODEX_MODEL_LIST_INVALID", "CODEX_MODEL_LIST_EMPTY"]) {
+    const status = codexConnectionFailure(Object.assign(new Error("bad model list"), { code }), 1);
+    assert.equal(status.state, "connection-failed");
+    assert.equal(status.code, code);
+    assert.match(status.action, /Restart DSH/);
+  }
+});
+
+test("connected status can expose selected runtime diagnostics", () => {
+  const status = connectedCodexConnectionStatus(3, {
+    runtime: { source: "local", path: "/Applications/ChatGPT.app/Contents/Resources/codex", modelCount: 6 },
+  });
+  assert.deepEqual(status.runtime, {
+    source: "local",
+    path: "/Applications/ChatGPT.app/Contents/Resources/codex",
+    modelCount: 6,
+  });
 });
 
 test("protocol and process failures remain distinct from installation failures", () => {

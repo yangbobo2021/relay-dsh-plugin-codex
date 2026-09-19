@@ -14,7 +14,7 @@ if (!dsh) throw new Error('Set DSH_ROOT to a prepared official deepseek-harness 
 const version = JSON.parse(readFileSync(join(dsh, 'apps/cli/package.json'), 'utf8')).version;
 const verifiedVersions = new Set(['0.1.2-alpha.2', '0.1.2-alpha.3', '0.1.2-rc.1', '0.1.5-rc.2', '0.1.6-alpha.1']);
 if (!verifiedVersions.has(version)) {
-  throw new Error(`Expected a verified DSH 0.1.2 prerelease, found ${version}. Select an audited official checkout.`);
+  throw new Error(`Expected a verified DSH release, found ${version}. Select an audited official checkout.`);
 }
 const sourceRoot = join(dsh, 'node_modules/.pnpm/node_modules/@deepseek-ai');
 const targetRoot = join(root, 'node_modules/@deepseek-ai');
