@@ -131,6 +131,6 @@
     "tsdown": "0.22.2",
     "typescript": "6.0.3",
     "vitest": "^4.1.8",
-    "relay-dsh-plugin-session-import": "github:yangbobo2021/relay-dsh-plugin-session-import#1b789b387e334f65ba364b1ed5fb91c861c5d045"
+    "relay-dsh-plugin-session-import": "0.2.3"
   }
 }
