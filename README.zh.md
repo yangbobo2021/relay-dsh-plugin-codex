@@ -2,7 +2,7 @@
 
 > **稳定版 `0.2.4` 已在官方 DSH `0.1.5-rc.2` 和 `0.1.6-alpha.1` 上验证。** 新版本支持运行时切换后刷新 Codex 模型，并让包含 `mcp__` 前缀工具的 DSH enhanced 模式保持可用，同时保留 `0.2.3` 的兼容性保证。[从 npm 安装](https://www.npmjs.com/package/relay-dsh-plugin-codex) · [兼容性证据](https://github.com/yangbobo2021/relay-dsh-plugin-codex/blob/main/validation/migration-compatibility/runs/2026-09-19_0.1.2-rc.1_76fda72_live_macos-arm64_ext017/results.md)。
 
-> **发布通道：** `latest` → `0.2.4`；`next` → `0.2.4-rc.1`。
+> **发布通道：** `latest` → `0.2.4`；`next` → `0.2.5-rc.1`。
 
 ```bash
 npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add relay-dsh-plugin-codex@latest
@@ -138,7 +138,7 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add relay-dsh-plugin-codex@
 npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add relay-dsh-plugin-codex@next
 ```
 
-`next` 标签指向 `0.2.4-rc.1`；`latest` 指向 `0.2.4`。
+`next` 标签指向 `0.2.5-rc.1`；`latest` 指向 `0.2.4`。
 安装前请以 npm 注册表中实际发布的 dist-tag 为准。
 
 本次预发布保留原生服务档位和恢复后的配置，修复取消轮次的迟到命令清理，
@@ -162,7 +162,7 @@ npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add github:yangbobo2021/
 SHA。例如：
 
 ```bash
-npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add github:yangbobo2021/relay-dsh-plugin-codex#v0.2.4
+npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add github:yangbobo2021/relay-dsh-plugin-codex#v0.2.5-rc.1
 ```
 
 官方 DSH CLI 会在需要时初始化 `web` Profile，通过 `pnpm` 安装所选软件包，

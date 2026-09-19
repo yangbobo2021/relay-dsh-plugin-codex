@@ -2,7 +2,7 @@
 
 > **Stable `0.2.4` is verified on official DSH `0.1.5-rc.2` and `0.1.6-alpha.1`.** It refreshes Codex models after runtime changes and keeps enhanced mode usable when DSH contributes `mcp__`-prefixed tools, while preserving the compatibility guarantees from `0.2.3`. [Install it from npm](https://www.npmjs.com/package/relay-dsh-plugin-codex) · [Compatibility evidence](https://github.com/yangbobo2021/relay-dsh-plugin-codex/blob/main/validation/migration-compatibility/runs/2026-09-19_0.1.2-rc.1_76fda72_live_macos-arm64_ext017/results.md).
 
-> **Release channels:** `latest` → `0.2.4`; `next` → `0.2.4-rc.1`.
+> **Release channels:** `latest` → `0.2.4`; `next` → `0.2.5-rc.1`.
 
 ```bash
 npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add relay-dsh-plugin-codex@latest
@@ -145,7 +145,7 @@ on a global `codex` executable:
 npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add relay-dsh-plugin-codex@next
 ```
 
-The `next` tag points to `0.2.4-rc.1`; `latest` points to `0.2.4`.
+The `next` tag points to `0.2.5-rc.1`; `latest` points to `0.2.4`.
 Check the npm registry for the currently published dist-tag before installing.
 
 This prerelease preserves native service-tier and resumed-thread settings, stops
@@ -175,7 +175,7 @@ npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add github:yangbobo2021/
 full Commit SHA instead. For example:
 
 ```bash
-npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add github:yangbobo2021/relay-dsh-plugin-codex#v0.2.4
+npx @deepseek-ai/dsh@0.1.6-alpha.1 plugin --profile web add github:yangbobo2021/relay-dsh-plugin-codex#v0.2.5-rc.1
 ```
 
 The official DSH CLI initializes the `web` Profile if it does not exist, asks
