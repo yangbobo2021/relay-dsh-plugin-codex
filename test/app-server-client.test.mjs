@@ -206,11 +206,11 @@ test("initialization client identity and capabilities can be overridden", async 
 
 test("an automatically discovered runtime with an unusable model list falls back to bundled", async () => {
   const root = await mkdtemp(join(tmpdir(), "relay-codex-preflight-"));
-  const local = join(root, "local-codex");
-  const bundled = join(root, "bundled-codex");
+  let local;
+  let bundled;
   try {
-    await writeExecutable(local, fixtureSource("[]"));
-    await writeExecutable(bundled, fixtureSource("[{ id: 'gpt-6-fixture', isDefault: true }]"));
+    local = await writeExecutable(join(root, "local-codex"), fixtureSource("[]"));
+    bundled = await writeNodeScript(join(root, "bundled-codex.js"), fixtureSource("[{ id: 'gpt-6-fixture', isDefault: true }]"));
     const diagnostics = [];
     const client = new CodexAppServerClient({
       env: { PATH: "" },
@@ -235,9 +235,8 @@ test("an automatically discovered runtime with an unusable model list falls back
 
 test("an explicitly configured runtime does not fall back after preflight failure", async () => {
   const root = await mkdtemp(join(tmpdir(), "relay-codex-explicit-"));
-  const local = join(root, "local-codex");
   try {
-    await writeExecutable(local, fixtureSource("[]"));
+    const local = await writeExecutable(join(root, "local-codex"), fixtureSource("[]"));
     const client = new CodexAppServerClient({ command: local, requestTimeoutMs: 5_000 });
     await assert.rejects(client.start(), (error) => error.code === "CODEX_MODEL_LIST_EMPTY");
   } finally {
@@ -247,11 +246,9 @@ test("an explicitly configured runtime does not fall back after preflight failur
 
 test("when both automatic and bundled runtimes fail, the final error keeps both causes", async () => {
   const root = await mkdtemp(join(tmpdir(), "relay-codex-both-fail-"));
-  const local = join(root, "local-codex");
-  const bundled = join(root, "bundled-codex");
   try {
-    await writeExecutable(local, fixtureSource("[]"));
-    await writeExecutable(bundled, fixtureSource("[]"));
+    const local = await writeExecutable(join(root, "local-codex"), fixtureSource("[]"));
+    const bundled = await writeNodeScript(join(root, "bundled-codex.js"), fixtureSource("[]"));
     const client = new CodexAppServerClient({
       env: { PATH: "" },
       launchOptions: { candidatePaths: [local], resolvePackage: () => bundled },
@@ -288,8 +285,21 @@ test("requests made while App Server is stopped carry an actionable stable code"
 });
 
 async function writeExecutable(path, source) {
+  if (process.platform === "win32") {
+    const scriptPath = path + ".js";
+    const commandPath = path + ".cmd";
+    await writeFile(scriptPath, source);
+    await writeFile(commandPath, "@echo off\r\n\"" + process.execPath + "\" \"" + scriptPath + "\" %*\r\n");
+    return commandPath;
+  }
   await writeFile(path, `#!/usr/bin/env node\n${source}\n`);
   await chmod(path, 0o755);
+  return path;
+}
+
+async function writeNodeScript(path, source) {
+  await writeFile(path, source);
+  return path;
 }
 
 function fixtureSource(models) {

@@ -155,6 +155,7 @@ export class CodexAppServerClient extends EventEmitter {
     const child = spawn(this.command, this.args, {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      shell: process.platform === "win32" && /\.(?:bat|cmd)$/i.test(this.command),
     });
     this.process = child;
 
